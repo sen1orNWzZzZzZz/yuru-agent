@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能旅游多Agent规划系统 - Python版</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- 浮动粒子背景 -->
+    <div class="particles" id="particles"></div>
+
+    <!-- 顶部导航 -->
+    <header class="header">
+        <div class="header-inner">
+            <a href="index.html" class="logo">
+                <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/>
+                    <line x1="16" y1="8" x2="2" y2="22"/>
+                    <line x1="17.5" y1="15" x2="9" y2="15"/>
+                </svg>
+                <span class="logo-text">灵动旅心</span>
+            </a>
+            <div class="header-right" style="display:flex;gap:12px;align-items:center;">
+                <a href="admin.html" style="color:#667eea;font-size:0.85rem;text-decoration:none;padding:6px 14px;border:1px solid #667eea;border-radius:20px;">系统管理</a>
+                <span class="header-badge">Python版 FastAPI</span>
+                <div class="header-orb"></div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主内容区 -->
+    <main class="main">
+        <div class="hero">
+            <!-- 灵动光球 -->
+            <div class="orb-container">
+                <div class="orb orb-main" id="theOrb"></div>
+                <div class="orb-glow"></div>
+            </div>
+
+            <!-- 标题 -->
+            <h1 class="hero-title">开启你的专属旅程</h1>
+            <p class="hero-subtitle">6个AI智能体协作规划，反水军口碑过滤，空间智能推荐。输入你的旅行需求，体验多Agent实时协作。</p>
+
+            <!-- 输入区域 -->
+            <div class="input-area">
+                <!-- 快捷参数 -->
+                <div class="input-params">
+                    <div class="param-group">
+                        <label>出发日期</label>
+                        <input type="date" id="startDate" class="param-input" value="2026-06-01">
+                    </div>
+                    <div class="param-group">
+                        <label>结束日期</label>
+                        <input type="date" id="endDate" class="param-input" value="2026-06-05">
+                    </div>
+                    <div class="param-group">
+                        <label>出行人数</label>
+                        <div class="counter">
+                            <button onclick="changeTravelers(-1)" class="counter-btn">-</button>
+                            <span id="travelerCount">3</span>人
+                            <button onclick="changeTravelers(1)" class="counter-btn">+</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 文本输入框 -->
+                <div class="input-box" id="inputBox">
+                    <textarea
+                        id="promptInput"
+                        class="input-textarea"
+                        placeholder="例如：下个月带爸妈去杭州，想看西湖和灵隐寺，不要太累，预算人均3000..."
+                        rows="3"
+                    >下个月带爸妈去杭州，想看西湖和灵隐寺，不要太累，预算人均3000</textarea>
+                    <div class="input-footer">
+                        <div class="input-meta">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
+                                <circle cx="12" cy="10" r="3"/>
+                            </svg>
+                            <span id="charCount">32字</span>
+                        </div>
+                        <button class="btn-primary" id="submitBtn" onclick="submitPlan()">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                            </svg>
+                            <span id="btnText">开始规划</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 快捷标签 -->
+                <div class="quick-tags">
+                    <button class="tag active" data-tag="家庭出游" onclick="toggleTag(this)">
+                        <span class="tag-icon">&#x1F46A;</span>家庭出游
+                    </button>
+                    <button class="tag active" data-tag="慢节奏" onclick="toggleTag(this)">
+                        <span class="tag-icon">&#x1F343;</span>慢节奏
+                    </button>
+                    <button class="tag" data-tag="美食之旅" onclick="toggleTag(this)">
+                        <span class="tag-icon">&#x1F35C;</span>美食之旅
+                    </button>
+                    <button class="tag" data-tag="特种兵" onclick="toggleTag(this)">
+                        <span class="tag-icon">&#x26A1;</span>特种兵
+                    </button>
+                    <button class="tag" data-tag="摄影" onclick="toggleTag(this)">
+                        <span class="tag-icon">&#x1F4F7;</span>摄影
+                    </button>
+                    <button class="tag" data-tag="情侣" onclick="toggleTag(this)">
+                        <span class="tag-icon">&#x1F495;</span>情侣
+                    </button>
+                </div>
+
+                <!-- 示例文案 -->
+                <div class="examples">
+                    <span class="examples-label">试试这些示例（点击自动填充）</span>
+                    <div class="example-list">
+                        <button class="example-btn" onclick="setExample('下个月带爸妈去杭州，想看西湖和灵隐寺，不要太累，预算人均3000')">
+                            带爸妈去杭州，看西湖和灵隐寺...
+                        </button>
+                        <button class="example-btn" onclick="setExample('和女朋友去成都，想吃火锅看大熊猫，预算人均3000')">
+                            和女朋友去成都，吃火锅看大熊猫...
+                        </button>
+                        <button class="example-btn" onclick="setExample('西安历史文化游，兵马俑和古城墙必去，四天三晚')">
+                            西安历史文化游，兵马俑古城墙...
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 底部特性 -->
+            <div class="features">
+                <div class="feature-card">
+                    <div class="feature-icon" style="background: linear-gradient(135deg, #F2D0B6, #D98A5B20);">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#D98A5B" stroke-width="2">
+                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                        </svg>
+                    </div>
+                    <h3 class="feature-title">多Agent智能协作</h3>
+                    <p class="feature-desc">6个专业Agent通过ThreadPoolExecutor并行工作，中央调度器统一协调</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon" style="background: linear-gradient(135deg, #C8E6C9, #81C78420);">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6BAF92" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        </svg>
+                    </div>
+                    <h3 class="feature-title">反水军口碑过滤</h3>
+                    <p class="feature-desc">自研算法识别虚假推荐，互动异常检测，作者信誉评分</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon" style="background: linear-gradient(135deg, #BBDEFB, #64B5F620);">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#64B5F6" stroke-width="2">
+                            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
+                            <circle cx="12" cy="10" r="3"/>
+                        </svg>
+                    </div>
+                    <h3 class="feature-title">空间智能推荐</h3>
+                    <p class="feature-desc">以酒店为锚点，Haversine公式计算周边3km美食和景点</p>
+                </div>
+            </div>
+
+            <!-- 本地运行提示 -->
+            <div style="margin-top: 40px; padding: 20px; border-radius: 16px; background: rgba(217,138,91,0.08); border: 1px dashed #D98A5B;">
+                <p style="font-size: 13px; color: #D98A5B; font-weight: 600; margin-bottom: 8px;">&#127881; 这是静态演示版本，完整Python后端功能如下：</p>
+                <p style="font-size: 12px; color: #6B7780; line-height: 1.8;">
+                    1. 在输入框输入需求，点击"开始规划"将跳转看板页<br>
+                    2. 看板页展示6个Agent的完整协作结果（预生成真实数据）<br>
+                    3. 点击口碑分数徽章查看小红书反水军分析详情<br>
+                    4. 本地运行完整后端：<code style="background: #fff; padding: 2px 6px; border-radius: 4px;">python run.py</code> 可体验实时Agent编排
+                </p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Toast通知 -->
+    <div class="toast-container" id="toast"></div>
+
+    <script src="js/main.js"></script>
+    <script>
+    // 全局状态
+    let travelers = 3;
+    let selectedTags = ['家庭出游', '慢节奏'];
+
+    // 字符计数
+    const textarea = document.getElementById('promptInput');
+    const charCount = document.getElementById('charCount');
+    textarea.addEventListener('input', () => {
+        charCount.textContent = textarea.value.length + '字';
+        autoResize(textarea);
+    });
+
+    function autoResize(el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+    }
+
+    // 初始化自动调整
+    autoResize(textarea);
+
+    // 人数调整
+    function changeTravelers(delta) {
+        travelers = Math.max(1, Math.min(20, travelers + delta));
+        document.getElementById('travelerCount').textContent = travelers;
+    }
+
+    // 标签切换
+    function toggleTag(btn) {
+        const tag = btn.dataset.tag;
+        if (selectedTags.includes(tag)) {
+            selectedTags = selectedTags.filter(t => t !== tag);
+            btn.classList.remove('active');
+        } else {
+            selectedTags.push(tag);
+            btn.classList.add('active');
+        }
+    }
+
+    // 设置示例
+    function setExample(text) {
+        textarea.value = text;
+        charCount.textContent = text.length + '字';
+        autoResize(textarea);
+        textarea.focus();
+    }
+
+    // 提交规划请求 - 静态版直接加载预生成数据
+    async function submitPlan() {
+        const prompt = textarea.value.trim();
+        if (!prompt) {
+            showToast('请输入您的旅行需求', 'warning');
+            return;
+        }
+
+        const btn = document.getElementById('submitBtn');
+        const btnText = document.getElementById('btnText');
+        btn.disabled = true;
+        btnText.textContent = 'Agent协作中...';
+
+        try {
+            // 静态演示版：直接加载预生成的Agent编排结果
+            const response = await fetch('api_result.json');
+            const data = await response.json();
+
+            // 存储结果
+            localStorage.setItem('planResult', JSON.stringify(data));
+            localStorage.setItem('planPrompt', prompt);
+            window.location.href = 'planning.html';
+        } catch (error) {
+            showToast('加载失败，请重试', 'error');
+            console.error(error);
+        }
+    }
+
+    // Toast通知
+    function showToast(message, type) {
+        const toast = document.getElementById('toast');
+        const el = document.createElement('div');
+        el.className = `toast toast-${type}`;
+        el.textContent = message;
+        toast.appendChild(el);
+        setTimeout(() => el.remove(), 3000);
+    }
+    </script>
+</body>
+</html>

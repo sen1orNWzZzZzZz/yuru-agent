@@ -1,0 +1,367 @@
+{% extends "base_v3.html" %}
+
+{% block title %}系统管理 - 灵动旅心 V3{% endblock %}
+
+{% block content %}
+<div class="admin-header animate-fade-up">
+    <div class="heading-lg">系统管理</div>
+    <p>配置 LLM、天气、地图 API，查看系统运行状态与数据规模</p>
+</div>
+
+<!-- 系统状态 -->
+<div class="grid-4 status-grid animate-fade-up animate-delay-1">
+    <div class="card status-card">
+        <div class="status-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="4" width="16" height="16" rx="2" ry="2"/>
+                <rect x="9" y="9" width="6" height="6"/>
+                <line x1="9" y1="1" x2="9" y2="4"/>
+                <line x1="15" y1="1" x2="15" y2="4"/>
+                <line x1="9" y1="20" x2="9" y2="23"/>
+                <line x1="15" y1="20" x2="15" y2="23"/>
+            </svg>
+        </div>
+        <div class="status-card-label">LLM</div>
+        <div id="statusLlm" class="status-badge status-warn">
+            <span class="status-dot"></span>加载中...
+        </div>
+    </div>
+
+    <div class="card status-card">
+        <div class="status-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="5"/>
+                <line x1="12" y1="1" x2="12" y2="3"/>
+                <line x1="12" y1="21" x2="12" y2="23"/>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                <line x1="1" y1="12" x2="3" y2="12"/>
+                <line x1="21" y1="12" x2="23" y2="12"/>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+            </svg>
+        </div>
+        <div class="status-card-label">天气 API</div>
+        <div id="statusWeather" class="status-badge status-warn">
+            <span class="status-dot"></span>加载中...
+        </div>
+    </div>
+
+    <div class="card status-card">
+        <div class="status-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="1 6 1 22 8 18 16 22 21 18 21 2 16 6 8 2 1 6"/>
+                <line x1="8" y1="2" x2="8" y2="18"/>
+                <line x1="16" y1="6" x2="16" y2="22"/>
+            </svg>
+        </div>
+        <div class="status-card-label">地图 API</div>
+        <div id="statusMap" class="status-badge status-warn">
+            <span class="status-dot"></span>加载中...
+        </div>
+    </div>
+
+    <div class="card status-card">
+        <div class="status-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+        </div>
+        <div class="status-card-label">数据库</div>
+        <div id="statusDb" class="status-badge status-ok">
+            <span class="status-dot"></span>就绪
+        </div>
+    </div>
+</div>
+
+<!-- LLM配置 -->
+<div class="card config-card animate-fade-up animate-delay-2">
+    <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="4" width="16" height="16" rx="2" ry="2"/>
+            <rect x="9" y="9" width="6" height="6"/>
+            <line x1="9" y1="1" x2="9" y2="4"/>
+            <line x1="15" y1="1" x2="15" y2="4"/>
+        </svg>
+        LLM API 配置
+    </div>
+    <form id="llmForm" onsubmit="return saveLlmConfig(event)">
+        <div class="form-row">
+            <div class="form-group">
+                <label>配置名称</label>
+                <input type="text" id="llmName" value="default">
+            </div>
+            <div class="form-group">
+                <label>API Key *</label>
+                <input type="password" id="llmKey" placeholder="sk-..." required>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Base URL</label>
+                <input type="url" id="llmUrl" value="https://api.openai.com/v1">
+            </div>
+            <div class="form-group">
+                <label>模型名称</label>
+                <input type="text" id="llmModel" value="gpt-4o-mini">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Temperature (0-2)</label>
+                <input type="number" id="llmTemp" value="0.7" min="0" max="2" step="0.1">
+            </div>
+            <div class="form-group">
+                <label>Max Tokens</label>
+                <input type="number" id="llmTokens" value="4096" min="256" step="256">
+            </div>
+        </div>
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+            <label class="form-check">
+                <input type="checkbox" id="llmUse" checked>
+                <span>启用 LLM</span>
+            </label>
+            <button type="submit" class="btn btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/>
+                    <polyline points="7 3 7 8 15 8"/>
+                </svg>
+                保存
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="testApi('llm')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
+                测试连接
+            </button>
+        </div>
+    </form>
+</div>
+
+<!-- 天气API配置 -->
+<div class="card config-card animate-fade-up animate-delay-2">
+    <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5"/>
+            <line x1="12" y1="1" x2="12" y2="3"/>
+            <line x1="12" y1="21" x2="12" y2="23"/>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+            <line x1="1" y1="12" x2="3" y2="12"/>
+            <line x1="21" y1="12" x2="23" y2="12"/>
+        </svg>
+        天气 API 配置
+    </div>
+    <form id="weatherForm" onsubmit="return saveApiConfig(event, 'weather')">
+        <div class="form-row">
+            <div class="form-group">
+                <label>提供商</label>
+                <select id="weatherProvider">
+                    <option value="openweathermap">OpenWeatherMap</option>
+                    <option value="qweather">和风天气 (QWeather)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>API Key *</label>
+                <input type="password" id="weatherKey" placeholder="API密钥" required>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Base URL（可选）</label>
+                <input type="url" id="weatherUrl" placeholder="留空使用默认">
+            </div>
+        </div>
+        <div style="display:flex;gap:16px;">
+            <button type="submit" class="btn btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/>
+                </svg>
+                保存
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="testApi('weather')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
+                测试连接
+            </button>
+        </div>
+        <div class="help-box">
+            <strong>支持的天气API：</strong><br>
+            · <a href="https://openweathermap.org/api" target="_blank">OpenWeatherMap</a> — 免费版支持 1000 次/天，Base URL 可留空<br>
+            · <a href="https://dev.qweather.com/" target="_blank">和风天气</a> — 国内 API；<strong>必须在 Base URL 填写你的专属 API Host</strong>（控制台-设置中查看，格式如 https://abcxyz.qweatherapi.com）
+        </div>
+    </form>
+</div>
+
+<!-- 地图API配置 -->
+<div class="card config-card animate-fade-up animate-delay-2">
+    <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="1 6 1 22 8 18 16 22 21 18 21 2 16 6 8 2 1 6"/>
+            <line x1="8" y1="2" x2="8" y2="18"/>
+            <line x1="16" y1="6" x2="16" y2="22"/>
+        </svg>
+        地图 API 配置
+    </div>
+    <form id="mapForm" onsubmit="return saveApiConfig(event, 'map')">
+        <div class="form-row">
+            <div class="form-group">
+                <label>提供商</label>
+                <select id="mapProvider">
+                    <option value="amap">高德地图 (AMap)</option>
+                    <option value="baidu">百度地图</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>API Key *</label>
+                <input type="password" id="mapKey" placeholder="API密钥" required>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Base URL（可选）</label>
+                <input type="url" id="mapUrl" placeholder="留空使用默认">
+            </div>
+        </div>
+        <div style="display:flex;gap:16px;">
+            <button type="submit" class="btn btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/>
+                </svg>
+                保存
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="testApi('map')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
+                测试连接
+            </button>
+        </div>
+        <div class="help-box" style="background:var(--success-soft);color:var(--success);">
+            <strong>支持的地图API：</strong><br>
+            · <a href="https://console.amap.com/" target="_blank" style="color:var(--success);">高德地图</a> — 国内首选，免费额度充足<br>
+            · <a href="https://lbsyun.baidu.com/" target="_blank" style="color:var(--success);">百度地图</a> — 国内替代方案
+        </div>
+    </form>
+</div>
+
+<!-- 数据概览 -->
+<div class="card config-card animate-fade-up animate-delay-3">
+    <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="9" ry="3"/>
+            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+        </svg>
+        数据库概览
+    </div>
+    <div class="grid-4" id="dbStats">
+        <div class="text-center">
+            <div id="dbHotels" style="font-size:2rem;font-weight:600;color:var(--accent);font-family:var(--font-display);">-</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">酒店</div>
+        </div>
+        <div class="text-center">
+            <div id="dbRestaurants" style="font-size:2rem;font-weight:600;color:var(--accent);font-family:var(--font-display);">-</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">餐厅</div>
+        </div>
+        <div class="text-center">
+            <div id="dbAttractions" style="font-size:2rem;font-weight:600;color:var(--accent);font-family:var(--font-display);">-</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">景点</div>
+        </div>
+        <div class="text-center">
+            <div id="dbXhs" style="font-size:2rem;font-weight:600;color:var(--accent);font-family:var(--font-display);">-</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">小红书笔记</div>
+        </div>
+    </div>
+</div>
+
+<!-- 测试结果 -->
+<div id="testResult" class="card" style="display:none;"></div>
+
+<script>
+document.addEventListener('DOMContentLoaded', loadStatus);
+
+async function loadStatus() {
+    try {
+        const r = await apiGet('/api/admin/status');
+        if (r.success) {
+            const d = r.data;
+            updateStatus('statusLlm', d.llm.configured, d.llm.model);
+            updateStatus('statusWeather', d.weather.configured, d.weather.provider);
+            updateStatus('statusMap', d.map.configured, d.map.provider);
+            document.getElementById('dbHotels').textContent = d.database.hotels;
+            document.getElementById('dbRestaurants').textContent = d.database.restaurants;
+            document.getElementById('dbAttractions').textContent = d.database.attractions;
+            document.getElementById('dbXhs').textContent = d.database.xiaohongshu;
+        }
+    } catch (e) { console.error('加载状态失败:', e); }
+}
+
+function updateStatus(id, ok, detail) {
+    const el = document.getElementById(id);
+    if (ok) {
+        el.className = 'status-badge status-ok';
+        el.innerHTML = `<span class="status-dot"></span>已配置 ${detail ? '(' + detail + ')' : ''}`;
+    } else {
+        el.className = 'status-badge status-err';
+        el.innerHTML = '<span class="status-dot"></span>未配置';
+    }
+}
+
+async function saveLlmConfig(e) {
+    e.preventDefault();
+    const body = {
+        name: document.getElementById('llmName').value,
+        api_key: document.getElementById('llmKey').value,
+        base_url: document.getElementById('llmUrl').value,
+        model_name: document.getElementById('llmModel').value,
+        temperature: parseFloat(document.getElementById('llmTemp').value),
+        max_tokens: parseInt(document.getElementById('llmTokens').value),
+        use_llm: document.getElementById('llmUse').checked,
+    };
+    const r = await apiPost('/api/admin/llm/config', body);
+    showToast(r.success ? 'LLM配置保存成功' : r.message, r.success ? 'success' : 'error');
+    if (r.success) loadStatus();
+    return false;
+}
+
+async function saveApiConfig(e, configType) {
+    e.preventDefault();
+    const body = {
+        config_type: configType,
+        provider: document.getElementById(configType + 'Provider').value,
+        api_key: document.getElementById(configType + 'Key').value,
+        base_url: document.getElementById(configType + 'Url').value || '',
+        extra_params: '{}',
+    };
+    const r = await apiPost('/api/admin/api/config', body);
+    showToast(r.success ? '配置保存成功' : r.message, r.success ? 'success' : 'error');
+    if (r.success) loadStatus();
+    return false;
+}
+
+async function testApi(configType) {
+    const resultDiv = document.getElementById('testResult');
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '<div class="loading"><div class="spinner"></div><span>测试中...</span></div>';
+
+    try {
+        const r = await apiPost('/api/admin/test/' + configType, {});
+        resultDiv.innerHTML = `<div style="padding:18px;border-radius:var(--radius-sm);background:${r.success ? 'var(--success-soft)' : 'var(--danger-soft)'};color:${r.success ? 'var(--success)' : 'var(--danger)'};">
+            <div style="font-weight:600;margin-bottom:6px;">${r.success ? '连接成功' : '连接失败'}</div>
+            <div style="font-size:0.85rem;">${r.message || ''}</div>
+            ${r.model ? `<div style="font-size:0.8rem;margin-top:4px;">模型：${r.model}</div>` : ''}
+            ${r.latency_ms ? `<div style="font-size:0.8rem;">延迟：${r.latency_ms}ms</div>` : ''}
+        </div>`;
+    } catch (e) {
+        resultDiv.innerHTML = `<div style="padding:18px;border-radius:var(--radius-sm);background:var(--danger-soft);color:var(--danger);">测试异常：${e.message}</div>`;
+    }
+}
+</script>
+{% endblock %}

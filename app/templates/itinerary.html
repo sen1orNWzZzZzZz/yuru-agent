@@ -1,0 +1,267 @@
+{% extends "base.html" %}
+
+{% block title %}行程规划 - 灵动旅心{% endblock %}
+
+{% block content %}
+<div class="itinerary-container">
+    <!-- 顶部导航 -->
+    <div class="itinerary-header">
+        <a href="/planning" class="back-btn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
+            </svg>
+        </a>
+        <div class="itinerary-title-group">
+            <h1 class="itinerary-title" id="itineraryTitle">行程规划</h1>
+            <p class="itinerary-subtitle" id="itinerarySubtitle">--</p>
+        </div>
+    </div>
+
+    <!-- 行程摘要 -->
+    <div class="summary-card" id="summaryCard">
+        <div class="summary-grid">
+            <div class="summary-item">
+                <span class="summary-value" id="dayCount">--</span>
+                <span class="summary-label">天数</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-value" style="color: #D98A5B;" id="totalCost">--</span>
+                <span class="summary-label">预估费用</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-value" style="color: #6BAF92;" id="itemCount">--</span>
+                <span class="summary-label">行程项</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 行程天列表 -->
+    <div class="days-container" id="daysContainer">
+        <!-- 由JS动态生成 -->
+    </div>
+
+    <!-- 小红书弹窗 -->
+    <div class="modal-overlay" id="xhsModal" style="display: none;" onclick="closeModal()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <div class="xhs-badge">小红书</div>
+                    <div>
+                        <h3 class="modal-title" id="modalTitle">--</h3>
+                        <p class="modal-subtitle" id="modalSubtitle">--</p>
+                    </div>
+                </div>
+                <span class="modal-close" onclick="closeModal()">&times;</span>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- 笔记列表 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部浮动按钮 -->
+    <div class="floating-bar">
+        <button class="btn-primary btn-large" onclick="optimizeItinerary()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+            智能优化行程
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 模拟行程数据
+const MOCK_ITINERARY = {
+    title: "杭州西湖慢节奏三日游",
+    destination: "杭州",
+    start_date: "2026-06-01",
+    end_date: "2026-06-03",
+    traveler_count: 3,
+    days: [
+        {
+            day_number: 1, date: "2026-06-01", theme: "西湖环湖慢游",
+            items: [
+                { id: 1, type: "transport", name: "上海虹桥 → 杭州东", detail: "G7501次高铁 · 二等座", time: "08:30 - 09:30", cost: 240 },
+                { id: 2, type: "hotel", name: "杭州西湖国宾馆", detail: "庭院景大床房 · 含双早", time: "10:00 入住", cost: 1680, xhs_score: 85, xhs_mentions: 342, address: "杭州市西湖区杨公堤18号" },
+                { id: 3, type: "attraction", name: "西湖风景区", detail: "环湖骑行 · 断桥残雪→白堤→平湖秋月", time: "14:00 - 17:30", cost: 0, xhs_score: 92, xhs_mentions: 12500, tips: "建议租自行车环湖，傍晚的雷峰塔夕阳最美" },
+                { id: 4, type: "restaurant", name: "楼外楼", detail: "西湖醋鱼 · 龙井虾仁 · 东坡肉", time: "18:00 - 20:00", cost: 450, xhs_score: 72, xhs_mentions: 2340, address: "杭州市西湖区孤山路30号" },
+            ]
+        },
+        {
+            day_number: 2, date: "2026-06-02", theme: "灵隐禅意与茶文化",
+            items: [
+                { id: 5, type: "attraction", name: "灵隐寺", detail: "千年古刹 · 飞来峰石窟 · 素面午餐", time: "07:30 - 12:00", cost: 75, xhs_score: 88, xhs_mentions: 8900, tips: "早去避开人流，素面20元一碗超值", needs_booking: true },
+                { id: 6, type: "restaurant", name: "知味观", detail: "小笼包 · 猫耳朵 · 片儿川", time: "12:30 - 13:30", cost: 120, xhs_score: 78, xhs_mentions: 3450 },
+                { id: 7, type: "attraction", name: "龙井村", detail: "茶园漫步 · 品茶体验", time: "14:30 - 17:00", cost: 100, xhs_score: 86, xhs_mentions: 5600, tips: "可以体验采茶，购买龙井茶注意辨别真伪" },
+                { id: 8, type: "restaurant", name: "桂语山房", detail: "黑珍珠餐厅 · 桂花糖藕", time: "18:30 - 20:30", cost: 800, xhs_score: 90, xhs_mentions: 1890, address: "杭州市西湖区满觉陇路" },
+            ]
+        },
+        {
+            day_number: 3, date: "2026-06-03", theme: "西溪湿地与返程",
+            items: [
+                { id: 9, type: "attraction", name: "西溪国家湿地公园", detail: "摇橹船游湿地 · 花朝节", time: "09:00 - 13:00", cost: 180, xhs_score: 84, xhs_mentions: 9800, tips: "摇橹船100元/小时，体验最佳" },
+                { id: 10, type: "restaurant", name: "外婆家", detail: "外婆红烧肉 · 茶香鸡", time: "13:30 - 14:30", cost: 200, xhs_score: 68, xhs_mentions: 5670 },
+                { id: 11, type: "transport", name: "杭州东 → 上海虹桥", detail: "G7510次高铁 · 二等座", time: "16:00 - 17:00", cost: 240 },
+            ]
+        },
+    ]
+};
+
+// 模拟小红书笔记
+const MOCK_NOTES = [
+    { author: "旅行达人小王", avatar: "T", content: "体验太棒了！环境超级好，服务也很贴心。强烈推荐大家来！", likes: 1250, comments: 89, reliable: true },
+    { author: "美食探店七七", avatar: "M", content: "真的很不错，强烈推荐给大家！", likes: 8900, comments: 12, reliable: false, warning: "该账号疑似水军，互动数据异常（89000赞 vs 12评论）" },
+    { author: "杭州土著老李", avatar: "L", content: "作为本地人，这是我经常推荐给朋友的地方，真实体验分享。", likes: 567, comments: 234, reliable: true },
+];
+
+// 图标映射
+const TYPE_ICONS = {
+    hotel: { bg: '#E8D5C4', svg: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>' },
+    restaurant: { bg: '#C8E6C9', svg: '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>' },
+    attraction: { bg: '#BBDEFB', svg: '<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>' },
+    transport: { bg: '#C5CAE9', svg: '<rect x="4" y="3" width="16" height="16" rx="2"/><path d="M4 11h16"/><path d="M12 3v8"/>' },
+};
+
+let expandedDay = 0;
+
+window.addEventListener('DOMContentLoaded', () => {
+    renderItinerary();
+});
+
+function renderItinerary() {
+    const data = MOCK_ITINERARY;
+
+    // 更新标题
+    document.getElementById('itineraryTitle').textContent = data.title;
+    document.getElementById('itinerarySubtitle').textContent =
+        `${data.start_date} 至 ${data.end_date} · ${data.traveler_count}人`;
+
+    // 计算统计数据
+    const totalCost = data.days.reduce((s, d) => s + d.items.reduce((s2, i) => s2 + i.cost, 0), 0);
+    const totalItems = data.days.reduce((s, d) => s + d.items.length, 0);
+    document.getElementById('dayCount').textContent = data.days.length;
+    document.getElementById('totalCost').textContent = '¥' + totalCost;
+    document.getElementById('itemCount').textContent = totalItems;
+
+    // 渲染天
+    const container = document.getElementById('daysContainer');
+    container.innerHTML = data.days.map((day, idx) => renderDay(day, idx)).join('');
+}
+
+function renderDay(day, idx) {
+    const isExpanded = idx === expandedDay;
+    const dayCost = day.items.reduce((s, i) => s + i.cost, 0);
+
+    return `
+    <div class="day-card">
+        <button class="day-header" onclick="toggleDay(${idx})">
+            <div class="day-header-left">
+                <div class="day-badge">D${day.day_number}</div>
+                <div class="day-info">
+                    <span class="day-theme">${day.theme}</span>
+                    <span class="day-date">${day.date}</span>
+                </div>
+            </div>
+            <div class="day-header-right">
+                <span class="day-cost">¥${dayCost}</span>
+                <svg class="day-chevron ${isExpanded ? 'expanded' : ''}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6B7780" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+        </button>
+        <div class="day-items ${isExpanded ? 'expanded' : ''}">
+            ${day.items.map(item => renderTimelineItem(item)).join('')}
+        </div>
+    </div>
+    `;
+}
+
+function renderTimelineItem(item) {
+    const icon = TYPE_ICONS[item.type] || TYPE_ICONS.attraction;
+    const hasXhs = item.xhs_score !== undefined;
+
+    return `
+    <div class="timeline-item">
+        <div class="timeline-dot" style="background: ${icon.bg};">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">${icon.svg}</svg>
+        </div>
+        <div class="timeline-line"></div>
+        <div class="timeline-card">
+            <div class="timeline-header">
+                <span class="timeline-time">${item.time}</span>
+                ${item.needs_booking ? '<span class="booking-badge">需预约</span>' : ''}
+            </div>
+            <h4 class="timeline-name">${item.name}</h4>
+            <p class="timeline-detail">${item.detail}</p>
+            ${item.address ? `<p class="timeline-address">${item.address}</p>` : ''}
+            ${item.tips ? `<div class="timeline-tips">💡 ${item.tips}</div>` : ''}
+            <div class="timeline-footer">
+                <span class="timeline-cost">¥${item.cost}</span>
+                ${hasXhs ? `
+                    <button class="xhs-badge-btn ${getCredibilityClass(item.xhs_score)}" onclick="showXhsModal('${item.name}', ${item.xhs_score}, ${item.xhs_mentions})">
+                        ${item.xhs_score}分
+                    </button>
+                ` : ''}
+            </div>
+        </div>
+    </div>
+    `;
+}
+
+function getCredibilityClass(score) {
+    if (score >= 80) return 'xhs-high';
+    if (score >= 60) return 'xhs-medium';
+    return 'xhs-low';
+}
+
+function toggleDay(idx) {
+    expandedDay = expandedDay === idx ? -1 : idx;
+    renderItinerary();
+}
+
+function showXhsModal(name, score, mentions) {
+    document.getElementById('modalTitle').textContent = name;
+    document.getElementById('modalSubtitle').textContent = mentions + ' 篇相关笔记';
+
+    const body = document.getElementById('modalBody');
+    body.innerHTML = MOCK_NOTES.map(note => `
+        <div class="note-card">
+            <div class="note-author">
+                <div class="note-avatar" style="background: linear-gradient(135deg, #F2D0B6, #D98A5B);">${note.avatar}</div>
+                <span class="note-name">${note.author}</span>
+                ${note.reliable
+                    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6BAF92" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>'
+                    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#D96C6C" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+                }
+            </div>
+            <p class="note-content">${note.content}</p>
+            ${!note.reliable && note.warning ? `<p class="note-warning">&#9888; ${note.warning}</p>` : ''}
+            <div class="note-stats">
+                <span>&#10084; ${note.likes}</span>
+                <span>&#128172; ${note.comments}</span>
+            </div>
+        </div>
+    `).join('');
+
+    document.getElementById('xhsModal').style.display = 'flex';
+}
+
+function closeModal() {
+    document.getElementById('xhsModal').style.display = 'none';
+}
+
+function optimizeItinerary() {
+    showToast('智能优化功能开发中...', 'info');
+}
+
+function showToast(message, type) {
+    const toast = document.getElementById('toast');
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    el.textContent = message;
+    toast.appendChild(el);
+    setTimeout(() => el.remove(), 3000);
+}
+</script>
+{% endblock %}

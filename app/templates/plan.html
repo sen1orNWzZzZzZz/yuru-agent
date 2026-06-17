@@ -1,0 +1,400 @@
+{% extends "base_v3.html" %}
+
+{% block title %}智能规划 - 灵动旅心 V3{% endblock %}
+
+{% block content %}
+<div class="plan-header animate-fade-up">
+    <div class="heading-lg">智能旅行规划</div>
+    <p>输入目的地与偏好，PlannerAgent 将协调多子Agent为您生成专属行程</p>
+</div>
+
+<!-- 规划表单 -->
+<div class="card form-card plan-form animate-fade-up animate-delay-1" id="formCard">
+    <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="10" r="3"/>
+            <path d="M12 21.7C17.3 17 20 13 20 10a8 8 0 1 0-16 0c0 3 2.7 7 8 11.7z"/>
+        </svg>
+        旅行信息
+    </div>
+
+    <form id="planForm" onsubmit="return startPlan(event)">
+        <div class="form-row">
+            <div class="form-group">
+                <label>目的地城市 *</label>
+                <input type="text" id="destination" placeholder="如：杭州、成都、西安" required list="cityList" autocomplete="off">
+                <datalist id="cityList">
+                    <option value="北京"></option><option value="上海"></option><option value="广州"></option><option value="深圳"></option>
+                    <option value="杭州"></option><option value="成都"></option><option value="西安"></option><option value="重庆"></option>
+                    <option value="武汉"></option><option value="南京"></option><option value="苏州"></option><option value="厦门"></option>
+                    <option value="桂林"></option><option value="丽江"></option><option value="大理"></option>
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label>出发城市</label>
+                <input type="text" id="origin" value="上海" placeholder="出发城市">
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label>行程天数</label>
+                <select id="days">
+                    <option value="2">2天</option>
+                    <option value="3" selected>3天</option>
+                    <option value="4">4天</option>
+                    <option value="5">5天</option>
+                    <option value="7">7天</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>出行人数</label>
+                <select id="travelers">
+                    <option value="1">1人</option>
+                    <option value="2" selected>2人</option>
+                    <option value="3">3人</option>
+                    <option value="4">4人</option>
+                    <option value="5">5人及以上</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label>预算（元/人，可选）</label>
+                <input type="number" id="budget" placeholder="如：3000" min="500" step="500">
+            </div>
+            <div class="form-group">
+                <label>旅行风格</label>
+                <select id="style">
+                    <option value="balanced" selected>均衡节奏</option>
+                    <option value="slow">慢节奏 / 度假</option>
+                    <option value="intensive">高效 / 特种兵</option>
+                    <option value="family">家庭亲子</option>
+                    <option value="foodie">美食探索</option>
+                    <option value="photography">摄影采风</option>
+                </select>
+            </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-lg" style="width:100%;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            开始规划
+        </button>
+    </form>
+</div>
+
+<!-- 加载状态 -->
+<div id="loadingSection" style="display:none;">
+    <div class="card animate-fade-up" style="text-align:center;padding:56px;">
+        <div class="loading">
+            <div class="spinner"></div>
+            <span style="font-size:1.05rem;">PlannerAgent 正在协调子Agent为您规划行程...</span>
+        </div>
+        <div id="agentStatus" class="agent-status-list">
+            <!-- 动态显示Agent执行状态 -->
+        </div>
+    </div>
+</div>
+
+<!-- 结果展示 -->
+<div id="resultSection" style="display:none;"></div>
+
+<script>
+const iconCheck = `<svg class="agent-status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+const iconLoader = `<svg class="agent-status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`;
+const iconWait = `<svg class="agent-status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+
+const activityIcons = {
+    hotel: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/><path d="M9 16v-6"/><path d="M15 16v-6"/></svg>`,
+    restaurant: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3zm0 0v7"/></svg>`,
+    attraction: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 18l4-8 4 8"/><path d="M12 10V4"/><path d="M4 22h16"/></svg>`,
+    transport: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6 18v2"/><path d="M18 18v2"/><path d="M6 10h12"/></svg>`,
+    activity: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`
+};
+
+const agentNames = {
+    weather: '天气查询Agent',
+    hotel: '酒店推荐Agent',
+    restaurant: '餐饮推荐Agent',
+    attraction: '景点推荐Agent',
+    transport: '交通规划Agent',
+    risk: '风控Agent'
+};
+const agentOrder = ['weather', 'hotel', 'restaurant', 'attraction', 'transport', 'risk'];
+
+async function startPlan(e) {
+    e.preventDefault();
+    const data = {
+        destination: document.getElementById('destination').value.trim(),
+        origin: document.getElementById('origin').value.trim(),
+        days: parseInt(document.getElementById('days').value),
+        travelers: parseInt(document.getElementById('travelers').value),
+        budget: document.getElementById('budget').value ? parseInt(document.getElementById('budget').value) : null,
+        style: document.getElementById('style').value,
+    };
+
+    document.getElementById('formCard').style.display = 'none';
+    document.getElementById('loadingSection').style.display = 'block';
+    document.getElementById('resultSection').style.display = 'none';
+
+    const statusDiv = document.getElementById('agentStatus');
+    statusDiv.innerHTML = agentOrder.map(key =>
+        `<div id="agent-${key}" class="agent-status-item">${iconWait}${agentNames[key]} - 等待执行...</div>`
+    ).join('');
+
+    try {
+        const response = await fetch('/api/v3/plan/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (!response.ok || !response.body) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const chunks = buffer.split('\n\n');
+            buffer = chunks.pop();
+            for (const chunk of chunks) {
+                if (!chunk.startsWith('data: ')) continue;
+                const payload = chunk.slice(6);
+                if (payload === '[DONE]') continue;
+                try {
+                    const event = JSON.parse(payload);
+                    handleStreamEvent(event);
+                } catch (err) {
+                    console.error('解析 SSE 事件失败:', err);
+                }
+            }
+        }
+    } catch (e) {
+        showToast('请求失败: ' + e.message, 'error');
+        document.getElementById('formCard').style.display = 'block';
+        document.getElementById('loadingSection').style.display = 'none';
+    }
+
+    return false;
+}
+
+function handleStreamEvent(event) {
+    if (event.type === 'agent_start') {
+        const el = document.getElementById(`agent-${event.agent}`);
+        if (el) {
+            el.className = 'agent-status-item running';
+            el.innerHTML = `${iconLoader}${agentNames[event.agent]} - 执行中...`;
+        }
+    } else if (event.type === 'agent_complete') {
+        const el = document.getElementById(`agent-${event.agent}`);
+        if (el) {
+            el.className = 'agent-status-item done';
+            el.innerHTML = `${iconCheck}${agentNames[event.agent]} - 完成 (${event.duration_ms}ms)`;
+        }
+    } else if (event.type === 'itinerary_generating') {
+        const statusDiv = document.getElementById('agentStatus');
+        statusDiv.innerHTML += `<div class="agent-status-item running">${iconLoader}正在生成结构化行程...</div>`;
+    } else if (event.type === 'complete') {
+        renderResult(event.data);
+        showToast('行程规划完成');
+        document.getElementById('loadingSection').style.display = 'none';
+    } else if (event.type === 'error') {
+        showToast(event.message || '规划失败', 'error');
+        document.getElementById('formCard').style.display = 'block';
+        document.getElementById('loadingSection').style.display = 'none';
+    }
+}
+
+function renderResult(data) {
+    const sec = document.getElementById('resultSection');
+    sec.style.display = 'block';
+
+    const it = data.itinerary || {};
+    const days = it.days || [];
+    const risk = data.risk || {};
+    const agents = data.agent_results || {};
+
+    let html = `
+    <div class="result-header animate-fade-up">
+        <div>
+            <div class="heading-md">${it.title || '行程规划结果'}</div>
+            <div class="text-muted" style="font-size:0.85rem;margin-top:4px;">${data.destination} · ${data.days}天 · ${data.travelers}人</div>
+        </div>
+        <div class="result-meta">
+            <span class="tag ${data.llm_used ? 'tag-accent' : 'tag-muted'}">${data.llm_used ? 'LLM 增强' : '模板生成'}</span>
+            ${data.total_duration_ms ? `<span class="tag tag-muted">${data.total_duration_ms}ms</span>` : ''}
+        </div>
+    </div>
+
+    <div class="card overview-card animate-fade-up animate-delay-1">
+        <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                <line x1="16" y1="2" x2="16" y2="6"/>
+                <line x1="8" y1="2" x2="8" y2="6"/>
+                <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            行程概览
+        </div>
+        <div class="overview-grid">
+            <div class="overview-item">
+                <div class="overview-value">${data.destination}</div>
+                <div class="overview-label">目的地</div>
+            </div>
+            <div class="overview-item">
+                <div class="overview-value">${data.days}天</div>
+                <div class="overview-label">行程</div>
+            </div>
+            <div class="overview-item">
+                <div class="overview-value">${data.travelers}人</div>
+                <div class="overview-label">出行</div>
+            </div>
+            <div class="overview-item">
+                <div class="overview-value">${data.budget ? '¥' + data.budget : '-'}</div>
+                <div class="overview-label">预算/人</div>
+            </div>
+        </div>
+        ${it.summary ? `<div class="divider"></div><p style="color:var(--text-secondary);">${it.summary}</p>` : ''}
+        ${it.hotel ? `<div class="mt-2" style="font-size:0.9rem;"><strong style="color:var(--text);">推荐酒店：</strong><span style="color:var(--text-secondary);">${it.hotel}</span></div>` : ''}
+        ${it.transport ? `<div style="font-size:0.9rem;"><strong style="color:var(--text);">交通方案：</strong><span style="color:var(--text-secondary);">${it.transport}</span></div>` : ''}
+    </div>`;
+
+    if (agents.weather_result) {
+        html += renderWeatherCard(agents.weather_result);
+    }
+
+    html += `
+    <div class="animate-fade-up animate-delay-2">
+        <div class="heading-sm mb-2">每日行程</div>`;
+
+    days.forEach(day => {
+        html += `
+        <div class="card day-card">
+            <div class="day-header">
+                <div class="day-header-left">
+                    <div class="day-number">${day.day}</div>
+                    <div>
+                        <div class="day-theme">${day.theme || '第' + day.day + '天行程'}</div>
+                        ${day.weather ? `<div class="day-weather">${day.weather}</div>` : ''}
+                    </div>
+                </div>
+            </div>
+            <div class="activity-list">`;
+
+        (day.activities || []).forEach(act => {
+            html += `
+            <div class="activity-item">
+                <div class="activity-icon">${activityIcons[act.type] || activityIcons.activity}</div>
+                <div class="activity-body">
+                    <div class="activity-name">${act.name}</div>
+                    ${act.note ? `<div class="activity-note">${act.note}</div>` : ''}
+                </div>
+                <div class="activity-time">${act.time || ''}</div>
+            </div>`;
+        });
+
+        html += `</div></div>`;
+    });
+
+    html += `</div>`;
+
+    if (risk.data && risk.data.warnings && risk.data.warnings.length > 0) {
+        html += `
+    <div class="card risk-card animate-fade-up animate-delay-2">
+        <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/>
+                <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            出行提醒
+        </div>`;
+        risk.data.warnings.forEach(w => {
+            const tagClass = {high: 'tag-danger', medium: 'tag-warning', low: 'tag-info'}[w.level] || 'tag-warning';
+            html += `
+            <div class="risk-item">
+                <div class="risk-header">
+                    <span class="tag ${tagClass}">${w.type}</span>
+                    <span class="risk-message">${w.message}</span>
+                </div>
+                <div class="risk-suggestion">建议：${w.suggestion}</div>
+            </div>`;
+        });
+        html += `</div>`;
+    }
+
+    html += `
+    <div class="animate-fade-up animate-delay-3">
+        <div class="heading-sm mb-2">Agent 执行详情</div>
+        <div class="agent-grid">`;
+    Object.values(agents).forEach(a => {
+        html += `
+        <div class="agent-detail-card">
+            <div class="agent-detail-header">
+                <div class="agent-detail-name">${a.agent_name}</div>
+                <span class="tag ${a.status === 'completed' ? 'tag-success' : 'tag-danger'}">${a.status === 'completed' ? '完成' : '失败'}</span>
+            </div>
+            <div class="agent-detail-meta">${a.duration_ms || 0}ms · ${a.agent_type}</div>
+            ${a.reasoning ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:8px;line-height:1.6;">${a.reasoning.substring(0, 80)}...</div>` : ''}
+        </div>`;
+    });
+    html += `</div>
+    </div>
+
+    <div class="text-center mt-3 animate-fade-up animate-delay-3">
+        <button class="btn btn-primary" onclick="location.reload()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"/>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
+            重新规划
+        </button>
+    </div>`;
+
+    sec.innerHTML = html;
+}
+
+function renderWeatherCard(weather) {
+    const d = weather.data || {};
+    const current = d.current || {};
+    return `
+    <div class="card weather-card animate-fade-up animate-delay-1">
+        <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="5"/>
+                <line x1="12" y1="1" x2="12" y2="3"/>
+                <line x1="12" y1="21" x2="12" y2="23"/>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                <line x1="1" y1="12" x2="3" y2="12"/>
+                <line x1="21" y1="12" x2="23" y2="12"/>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+            </svg>
+            目的地天气
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap;">
+            <div>
+                <div style="font-size:2.8rem;font-weight:300;font-family:var(--font-display);">${current.temp || '?'}°C</div>
+                <div style="opacity:0.8;">${current.description || ''}</div>
+            </div>
+            <div style="text-align:right;">
+                <div style="font-size:0.85rem;opacity:0.7;">湿度 ${current.humidity || '?'}%</div>
+                <div style="font-size:0.85rem;opacity:0.7;">风速 ${current.wind_speed || '?'}m/s</div>
+                <div style="font-size:0.85rem;opacity:0.7;margin-top:8px;">${d.clothing_advice || ''}</div>
+                <div style="font-size:0.7rem;opacity:0.5;margin-top:8px;">数据来源：${current.provider || 'mock'}</div>
+            </div>
+        </div>
+    </div>`;
+}
+</script>
+{% endblock %}

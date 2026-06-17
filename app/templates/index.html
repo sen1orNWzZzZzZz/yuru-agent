@@ -1,0 +1,152 @@
+{% extends "base_v3.html" %}
+
+{% block title %}灵动旅心 V3 - 智能旅行规划系统{% endblock %}
+
+{% block content %}
+<section class="hero animate-fade-up">
+    <div class="hero-content">
+        <div class="hero-kicker">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+            </svg>
+            PlannerAgent 多子Agent 协同
+        </div>
+        <h1 class="heading-xl hero-title">以匠人之姿，<br>规划每一段旅程</h1>
+        <p class="hero-desc">
+            灵动旅心 V3 基于 PlannerAgent 中央调度器，协调天气、酒店、餐厅、景点、交通与风控六大子Agent，
+            融合 LLM 智能分析与真实口碑数据，为您生成兼具深度与温度的专属行程。
+        </p>
+        <div class="hero-actions">
+            <a href="/plan" class="btn btn-primary btn-lg">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                开始规划行程
+            </a>
+            <a href="/admin" class="btn btn-secondary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+                配置服务
+            </a>
+        </div>
+    </div>
+
+    <div class="hero-visual animate-fade-up animate-delay-1">
+        <div class="hero-frame">
+            <div class="hero-ring"></div>
+            <div class="hero-orb"></div>
+        </div>
+    </div>
+</section>
+
+<section class="features-section">
+    <div class="section-header animate-fade-up animate-delay-2">
+        <h2 class="heading-lg">核心能力</h2>
+        <p>多Agent协作，真实数据支撑，让每一次出行都经得起推敲</p>
+    </div>
+
+    <div class="grid-3 animate-fade-up animate-delay-2">
+        <div class="feature-card">
+            <div class="feature-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                    <polyline points="2 17 12 22 22 17"/>
+                    <polyline points="2 12 12 17 22 12"/>
+                </svg>
+            </div>
+            <div class="feature-title">PlannerAgent 调度</div>
+            <div class="feature-desc">中央调度器解析需求，并行驱动天气、酒店、餐厅、景点、交通、风控六大子Agent协同作业。</div>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17.5 19c0-1.7-3.1-3-7-3s-7 1.3-7 3"/>
+                    <circle cx="12" cy="10" r="4"/>
+                    <path d="M8 2v2M16 2v2M12 2v4"/>
+                </svg>
+            </div>
+            <div class="feature-title">反水军口碑</div>
+            <div class="feature-desc">小红书笔记可信度评分，识别刷量、模板化、僵尸粉等水军行为，让推荐更真实可信。</div>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+            </div>
+            <div class="feature-title">智能风控</div>
+            <div class="feature-desc">综合预算、安全、时间等维度进行风险检测，提前发现行程隐患并给出优化建议。</div>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+            </div>
+            <div class="feature-title">实时天气与穿着建议</div>
+            <div class="feature-desc">集成 OpenWeatherMap 与和风天气，结合气温与天气状况生成出行穿着与装备建议。</div>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/>
+                    <circle cx="12" cy="10" r="3"/>
+                </svg>
+            </div>
+            <div class="feature-title">地图 POI 搜索</div>
+            <div class="feature-desc">支持高德与百度地图 API，实时检索景点、酒店、餐厅等 POI 数据，辅助精准决策。</div>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                    <path d="M2 17l10 5 10-5"/>
+                    <path d="M2 12l10 5 10-5"/>
+                </svg>
+            </div>
+            <div class="feature-title">灵活 API 配置</div>
+            <div class="feature-desc">管理后台可视化配置 LLM、天气、地图 API，一键测试连接，未配置时自动降级 Mock 数据。</div>
+        </div>
+    </div>
+
+    <div class="card animate-fade-up animate-delay-3">
+        <div class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="20" x2="18" y2="10"/>
+                <line x1="12" y1="20" x2="12" y2="4"/>
+                <line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+            数据覆盖
+        </div>
+        <div class="stats-bar">
+            <div class="stat-cell">
+                <div class="stat-value">15</div>
+                <div class="stat-label">覆盖城市</div>
+            </div>
+            <div class="stat-cell">
+                <div class="stat-value">60+</div>
+                <div class="stat-label">精选酒店</div>
+            </div>
+            <div class="stat-cell">
+                <div class="stat-value">45+</div>
+                <div class="stat-label">特色餐厅</div>
+            </div>
+            <div class="stat-cell">
+                <div class="stat-value">75+</div>
+                <div class="stat-label">热门景点</div>
+            </div>
+        </div>
+        <div class="text-center text-muted mt-2" style="font-size:0.8rem;">
+            北京 · 上海 · 广州 · 深圳 · 杭州 · 成都 · 西安 · 重庆 · 武汉 · 南京 · 苏州 · 厦门 · 桂林 · 丽江 · 大理
+        </div>
+    </div>
+</section>
+{% endblock %}

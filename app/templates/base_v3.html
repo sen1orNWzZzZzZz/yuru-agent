@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}灵动旅心 V3{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container navbar-inner">
+            <a href="/" class="navbar-brand">
+                <svg class="brand-mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="16" cy="16" r="13"/>
+                    <path d="M3 16h26"/>
+                    <path d="M16 3c4 4 6 8 6 13s-2 9-6 13"/>
+                    <path d="M16 3c-4 4-6 8-6 13s2 9 6 13"/>
+                </svg>
+                <span class="brand-text">灵动旅心</span>
+                <span class="brand-tag">V3</span>
+            </a>
+            <div class="navbar-nav">
+                <a href="/" class="{% if request.path == '/' %}active{% endif %}">首页</a>
+                <a href="/plan" class="{% if request.path == '/plan' %}active{% endif %}">智能规划</a>
+                <a href="/admin">系统管理</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <div>灵动旅心 V3 · PlannerAgent + 子Agent 智能旅行规划</div>
+    </footer>
+
+    <script>
+        function showToast(msg, type='success') {
+            const t = document.createElement('div');
+            t.className = 'toast';
+            const colors = {
+                success: 'var(--success)',
+                error: 'var(--danger)',
+                warning: 'var(--warning)',
+                info: 'var(--info)'
+            };
+            t.style.background = colors[type] || colors.success;
+            t.textContent = msg;
+            document.body.appendChild(t);
+            setTimeout(() => {
+                t.style.opacity = '0';
+                t.style.transform = 'translateX(100%)';
+                setTimeout(() => t.remove(), 300);
+            }, 2800);
+        }
+
+        async function apiGet(url) {
+            const r = await fetch(url);
+            return r.json();
+        }
+
+        async function apiPost(url, body) {
+            const r = await fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            return r.json();
+        }
+    </script>
+    <script src="/static/js/main.js"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

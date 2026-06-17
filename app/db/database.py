@@ -1,0 +1,146 @@
+"""
+数据库管理模块 - SQLite连接和初始化
+"""
+import sqlite3
+from pathlib import Path
+
+# 数据库文件路径
+DB_DIR = Path(__file__).parent
+DB_PATH = DB_DIR / "travel_v3.db"
+INIT_SQL = DB_DIR / "init.sql"
+SEED_SQL = DB_DIR / "seed.sql"
+
+
+def get_db_connection():
+    """获取数据库连接"""
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def init_db(force=False):
+    """
+    初始化数据库
+    Args:
+        force: 如果为True，强制重新初始化（删除旧数据库）
+    """
+    if force and DB_PATH.exists():
+        DB_PATH.unlink()
+        print(f"[DB] 已删除旧数据库: {DB_PATH}")
+
+    if not DB_PATH.exists():
+        print("[DB] 正在初始化数据库...")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # 执行建表脚本
+        if INIT_SQL.exists():
+            with open(INIT_SQL, encoding="utf-8") as f:
+                cursor.executescript(f.read())
+            print("[DB] 表结构创建完成")
+
+        # 执行种子数据
+        if SEED_SQL.exists():
+            with open(SEED_SQL, encoding="utf-8") as f:
+                cursor.executescript(f.read())
+            print("[DB] 种子数据导入完成")
+
+        conn.commit()
+        conn.close()
+        print(f"[DB] 数据库初始化完成: {DB_PATH}")
+    else:
+        print(f"[DB] 数据库已存在: {DB_PATH}")
+        # 对已存在的数据库执行迁移，补齐后续新增的表和字段
+        migrate_db()
+
+
+def migrate_db():
+    """
+    数据库迁移：为已存在的数据库补齐后续版本新增的表和字段。
+
+    当前处理：
+    - 创建 llm_cache 表（如缺失）
+    - 为 agent_logs 增加 prompt_tokens / completion_tokens 字段（如缺失）
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS llm_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cache_key VARCHAR(64) NOT NULL UNIQUE,
+                model VARCHAR(100) NOT NULL,
+                messages_json TEXT NOT NULL,
+                response_content TEXT NOT NULL,
+                usage_json TEXT,
+                latency_ms INTEGER,
+                hit_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_hit_at TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL
+            )
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_llm_cache_key ON llm_cache(cache_key)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_llm_cache_expires ON llm_cache(expires_at)")
+
+        columns = {row["name"] for row in cursor.execute("PRAGMA table_info(agent_logs)").fetchall()}
+        if "prompt_tokens" not in columns:
+            cursor.execute("ALTER TABLE agent_logs ADD COLUMN prompt_tokens INTEGER DEFAULT 0")
+        if "completion_tokens" not in columns:
+            cursor.execute("ALTER TABLE agent_logs ADD COLUMN completion_tokens INTEGER DEFAULT 0")
+
+        conn.commit()
+        print("[DB] 数据库迁移完成")
+    finally:
+        conn.close()
+
+
+def get_db():
+    """
+    FastAPI依赖注入用的数据库连接生成器
+    Usage:
+        @app.get("/api/items")
+        def get_items(db = Depends(get_db)):
+            ...
+    """
+    conn = get_db_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def query_one(conn, sql, params=()):
+    """查询单条记录"""
+    cursor = conn.execute(sql, params)
+    row = cursor.fetchone()
+    cursor.close()
+    return dict(row) if row else None
+
+
+def query_all(conn, sql, params=()):
+    """查询多条记录"""
+    cursor = conn.execute(sql, params)
+    rows = cursor.fetchall()
+    cursor.close()
+    return [dict(row) for row in rows]
+
+
+def execute(conn, sql, params=()):
+    """执行SQL"""
+    cursor = conn.execute(sql, params)
+    conn.commit()
+    last_id = cursor.lastrowid
+    cursor.close()
+    return last_id
+
+
+def count_table(conn, table_name):
+    """统计表数据量"""
+    result = query_one(conn, f"SELECT COUNT(*) as cnt FROM {table_name}")
+    return result["cnt"] if result else 0

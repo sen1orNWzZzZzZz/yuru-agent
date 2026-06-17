@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统管理 - 智能旅游多Agent规划系统</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* 管理页面专用样式 */
+        .admin-container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .admin-header { margin-bottom: 30px; }
+        .admin-header h1 { font-size: 2rem; color: #1a1a2e; margin-bottom: 8px; }
+        .subtitle { color: #666; }
+
+        .status-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-bottom: 30px; }
+        .status-card { background: white; border-radius: 12px; padding: 20px; display: flex; align-items: center; gap: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .status-icon { font-size: 2rem; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+            background: #f8f9fa; border-radius: 12px; }
+        .status-info h3 { font-size: 0.85rem; color: #888; font-weight: 500; margin-bottom: 4px; }
+        .status-value { font-size: 1.25rem; font-weight: 600; color: #333; }
+        .status-value.on { color: #27ae60; }
+        .status-value.off { color: #e74c3c; }
+        .status-detail { font-size: 0.75rem; color: #aaa; }
+
+        .admin-section { background: white; border-radius: 12px; padding: 28px; margin-bottom: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .section-header { margin-bottom: 24px; }
+        .section-header h2 { font-size: 1.3rem; color: #1a1a2e; margin-bottom: 6px; }
+        .section-desc { font-size: 0.85rem; color: #888; }
+
+        .subsection-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+        .subsection-header h3 { font-size: 1.05rem; color: #333; }
+
+        .config-table-wrapper { overflow-x: auto; border: 1px solid #eee; border-radius: 8px; }
+        .config-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        .config-table th { background: #f8f9fa; padding: 12px 16px; text-align: left; font-weight: 600;
+            color: #555; border-bottom: 1px solid #eee; }
+        .config-table td { padding: 12px 16px; border-bottom: 1px solid #f0f0f0; }
+        .config-table tr:hover td { background: #fafbfc; }
+        .empty-row td { text-align: center; color: #999; padding: 32px; }
+        .masked-key { font-family: monospace; font-size: 0.8rem; color: #888; background: #f5f5f5;
+            padding: 2px 8px; border-radius: 4px; }
+
+        .config-form-section { background: #fafbfc; border-radius: 8px; padding: 24px; margin-top: 24px;
+            border: 1px solid #e8e8e8; }
+        .form-row { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+        .form-group { flex: 1; min-width: 200px; }
+        .form-group.flex-2 { flex: 2; }
+        .form-group label { display: block; font-size: 0.85rem; font-weight: 500; color: #444; margin-bottom: 6px; }
+        .form-group .required { color: #e74c3c; }
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.9rem; }
+        .form-group input:focus { outline: none; border-color: #667eea; }
+        .range-labels { display: flex; justify-content: space-between; font-size: 0.75rem; color: #888; }
+        .range-labels .current { color: #667eea; font-weight: 600; }
+        .form-help { font-size: 0.75rem; color: #999; margin-top: 4px; display: block; }
+
+        .checkbox-label { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem; }
+        .checkbox-label input { display: none; }
+        .checkmark { width: 18px; height: 18px; border: 2px solid #ccc; border-radius: 4px;
+            display: flex; align-items: center; justify-content: center; }
+        .checkbox-label input:checked + .checkmark { background: #667eea; border-color: #667eea; }
+        .checkbox-label input:checked + .checkmark::after { content: '✓'; color: white; font-size: 12px; }
+
+        .form-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;
+            padding-top: 20px; border-top: 1px solid #eee; }
+
+        .btn { padding: 10px 20px; border-radius: 6px; border: none; font-size: 0.9rem; cursor: pointer;
+            display: inline-flex; align-items: center; gap: 6px; }
+        .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .btn-secondary { background: #f0f0f0; color: #555; }
+        .btn-info { background: #e3f2fd; color: #1976d2; }
+        .btn:hover { transform: translateY(-1px); }
+
+        .test-result { margin-top: 16px; padding: 16px; border-radius: 8px; display: none; }
+        .test-result.success { background: #e8f5e9; border: 1px solid #a5d6a7; color: #2e7d32; display: block; }
+        .test-result.error { background: #ffebee; border: 1px solid #ef9a9a; color: #c62828; display: block; }
+
+        .tips-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+        .tip-card { background: #f8f9fa; border-radius: 8px; padding: 16px; font-size: 0.85rem; }
+        .tip-card h5 { font-size: 0.9rem; color: #333; margin-bottom: 8px; }
+        .tip-card code { background: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; color: #667eea; }
+
+        .agent-status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+        .agent-card { background: #fafbfc; border: 1px solid #eee; border-radius: 10px; padding: 20px; }
+        .agent-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+        .agent-icon { font-size: 1.8rem; }
+        .agent-header h4 { font-size: 1rem; color: #333; }
+        .agent-type { font-size: 0.75rem; color: #888; font-family: monospace; }
+        .agent-desc { font-size: 0.85rem; color: #666; line-height: 1.5; margin-bottom: 12px; }
+        .agent-meta { display: flex; gap: 8px; }
+
+        .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 500; }
+        .badge-success { background: #e8f5e9; color: #2e7d32; }
+        .badge-primary { background: #e3f2fd; color: #1565c0; }
+        .badge-info { background: #e0f7fa; color: #00838f; }
+        .badge-warning { background: #fff3e0; color: #e65100; }
+
+        .notification { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px;
+            font-size: 0.9rem; z-index: 9999; animation: slideIn 0.3s ease; }
+        .notification.success { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        .nav-links { display: flex; gap: 20px; margin-bottom: 20px; }
+        .nav-links a { color: #667eea; text-decoration: none; padding: 8px 16px; border-radius: 6px;
+            background: #f0f0f0; transition: all 0.2s; }
+        .nav-links a:hover, .nav-links a.active { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+    </style>
+</head>
+<body>
+    <div class="admin-container">
+        <!-- 导航 -->
+        <div class="nav-links">
+            <a href="index.html">首页</a>
+            <a href="planning.html">协作看板</a>
+            <a href="itinerary.html">行程结果</a>
+            <a href="admin.html" class="active">系统管理</a>
+        </div>
+
+        <div class="admin-header">
+            <h1>系统管理</h1>
+            <p class="subtitle">配置LLM API、管理系统参数、查看运行状态（演示模式）</p>
+        </div>
+
+        <!-- 状态卡片 -->
+        <div class="status-cards">
+            <div class="status-card">
+                <div class="status-icon">🤖</div>
+                <div class="status-info">
+                    <h3>LLM 状态</h3>
+                    <p class="status-value off" id="llmStatus">演示模式</p>
+                    <p class="status-detail">未连接后端</p>
+                </div>
+            </div>
+            <div class="status-card">
+                <div class="status-icon">📊</div>
+                <div class="status-info">
+                    <h3>Agent 数量</h3>
+                    <p class="status-value">6</p>
+                    <p class="status-detail">调度器+4推荐+风控</p>
+                </div>
+            </div>
+            <div class="status-card">
+                <div class="status-icon">🗂️</div>
+                <div class="status-info">
+                    <h3>Mock 城市</h3>
+                    <p class="status-value">15</p>
+                    <p class="status-detail">覆盖热门目的地</p>
+                </div>
+            </div>
+            <div class="status-card">
+                <div class="status-icon">🔒</div>
+                <div class="status-info">
+                    <h3>反水军</h3>
+                    <p class="status-value on">已启用</p>
+                    <p class="status-detail">8种水军检测</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- LLM配置 -->
+        <div class="admin-section">
+            <div class="section-header">
+                <h2>🤖 LLM API 配置</h2>
+                <p class="section-desc">演示模式：下方为模拟界面，实际功能需启动后端服务</p>
+            </div>
+
+            <div class="subsection-header">
+                <h3>已保存的配置</h3>
+                <button class="btn btn-primary" onclick="showForm()">+ 新增配置</button>
+            </div>
+
+            <div class="config-table-wrapper">
+                <table class="config-table" id="configTable">
+                    <thead>
+                        <tr><th>名称</th><th>模型</th><th>Base URL</th><th>温度</th><th>状态</th><th>操作</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr class="empty-row"><td colspan="6">暂无配置（演示模式）</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 表单 -->
+            <div class="config-form-section" id="formSection" style="display:none">
+                <h3>新增配置</h3>
+                <form id="configForm" onsubmit="return saveConfig(event)">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>配置名称 <span class="required">*</span></label>
+                            <input type="text" placeholder="如：默认配置、GPT-4" required>
+                        </div>
+                        <div class="form-group">
+                            <label>API Key <span class="required">*</span></label>
+                            <input type="password" placeholder="sk-xxxxxxxxxxxxxxxx" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group flex-2">
+                            <label>Base URL</label>
+                            <input type="url" value="https://api.openai.com/v1">
+                        </div>
+                        <div class="form-group">
+                            <label>模型名称</label>
+                            <input type="text" value="gpt-4o-mini">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Temperature (0-2)</label>
+                            <input type="range" min="0" max="2" step="0.1" value="0.7"
+                                oninput="this.nextElementSibling.querySelector('.current').textContent = this.value">
+                            <div class="range-labels"><span>精确</span><span class="current">0.7</span><span>创意</span></div>
+                        </div>
+                        <div class="form-group">
+                            <label>Max Tokens</label>
+                            <input type="number" value="4096" min="256" max="8192" step="256">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" checked><span class="checkmark"></span> 设为激活配置
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" checked><span class="checkmark"></span> 启用LLM
+                            </label>
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="hideForm()">取消</button>
+                        <button type="button" class="btn btn-info" onclick="testConnection()">🔌 测试连接</button>
+                        <button type="submit" class="btn btn-primary">💾 保存</button>
+                    </div>
+                </form>
+                <div class="test-result" id="testResult"></div>
+            </div>
+
+            <!-- 使用说明 -->
+            <div class="admin-section" style="margin-top:24px">
+                <h3>📖 使用说明</h3>
+                <div class="tips-grid">
+                    <div class="tip-card">
+                        <h5>OpenAI 官方</h5>
+                        <p>Base URL: <code>https://api.openai.com/v1</code></p>
+                        <p>模型: <code>gpt-4o-mini</code></p>
+                    </div>
+                    <div class="tip-card">
+                        <h5>SiliconFlow</h5>
+                        <p>Base URL: <code>https://api.siliconflow.cn/v1</code></p>
+                        <p>模型: <code>Qwen/Qwen2.5-72B-Instruct</code></p>
+                    </div>
+                    <div class="tip-card">
+                        <h5>自托管 (vLLM)</h5>
+                        <p>Base URL: <code>http://localhost:8000/v1</code></p>
+                        <p>模型: 部署时指定</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agent状态 -->
+        <div class="admin-section">
+            <div class="section-header">
+                <h2>🔧 Agent 运行状态</h2>
+            </div>
+            <div class="agent-status-grid">
+                <div class="agent-card">
+                    <div class="agent-header">
+                        <span class="agent-icon">🎯</span>
+                        <div><h4>中央调度器</h4><span class="agent-type">coordinator</span></div>
+                    </div>
+                    <p class="agent-desc">解析用户自然语言需求，提取目的地/预算/人数/风格</p>
+                    <div class="agent-meta"><span class="badge badge-primary">入口Agent</span><span class="badge badge-info">串行</span></div>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-header">
+                        <span class="agent-icon">🏨</span>
+                        <div><h4>酒店推荐</h4><span class="agent-type">hotel</span></div>
+                    </div>
+                    <p class="agent-desc">根据预算/人数/风格推荐酒店，补充小红书口碑</p>
+                    <div class="agent-meta"><span class="badge badge-primary">推荐Agent</span><span class="badge badge-success">并行</span></div>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-header">
+                        <span class="agent-icon">🍜</span>
+                        <div><h4>餐饮推荐</h4><span class="agent-type">restaurant</span></div>
+                    </div>
+                    <p class="agent-desc">基于酒店锚点的空间智能推荐(3km半径)</p>
+                    <div class="agent-meta"><span class="badge badge-primary">推荐Agent</span><span class="badge badge-success">并行</span></div>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-header">
+                        <span class="agent-icon">🏔️</span>
+                        <div><h4>景点推荐</h4><span class="agent-type">attraction</span></div>
+                    </div>
+                    <p class="agent-desc">按风格筛选景点，自动评估高反风险</p>
+                    <div class="agent-meta"><span class="badge badge-primary">推荐Agent</span><span class="badge badge-success">并行</span></div>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-header">
+                        <span class="agent-icon">✈️</span>
+                        <div><h4>交通规划</h4><span class="agent-type">transport</span></div>
+                    </div>
+                    <p class="agent-desc">生成飞机/高铁/自驾方案</p>
+                    <div class="agent-meta"><span class="badge badge-primary">推荐Agent</span><span class="badge badge-success">并行</span></div>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-header">
+                        <span class="agent-icon">🛡️</span>
+                        <div><h4>风控专家</h4><span class="agent-type">risk</span></div>
+                    </div>
+                    <p class="agent-desc">检测价格异常/高反风险/水军内容/时间冲突</p>
+                    <div class="agent-meta"><span class="badge badge-warning">风控Agent</span><span class="badge badge-info">串行</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showForm() { document.getElementById('formSection').style.display = 'block'; document.getElementById('formSection').scrollIntoView({behavior:'smooth'}); }
+        function hideForm() { document.getElementById('formSection').style.display = 'none'; document.getElementById('testResult').style.display = 'none'; }
+        function saveConfig(e) { e.preventDefault(); showNotification('演示模式：保存功能需要启动后端服务', 'success'); return false; }
+        function testConnection() {
+            const r = document.getElementById('testResult');
+            r.className = 'test-result error';
+            r.style.display = 'block';
+            r.innerHTML = '<h4>演示模式</h4><p>测试连接功能需要启动后端服务 (python run.py)</p>';
+        }
+        function showNotification(msg, type) {
+            const n = document.createElement('div'); n.className = 'notification ' + type; n.textContent = msg;
+            document.body.appendChild(n); setTimeout(() => n.remove(), 3000);
+        }
+    </script>
+</body>
+</html>

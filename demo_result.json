@@ -1,0 +1,445 @@
+{
+  "status": "completed",
+  "coordinator": {
+    "destination": "杭州",
+    "month": 6,
+    "travelers": 2,
+    "budget": null,
+    "travel_style": "family",
+    "keywords": [
+      "下个月带爸妈去杭州",
+      "想看西湖和灵隐寺",
+      "不要太累",
+      "预算人均3000"
+    ],
+    "confidence": 0.85
+  },
+  "agents": {
+    "hotel": {
+      "status": "completed",
+      "agent_type": "hotel",
+      "agent_name": "酒店推荐Agent",
+      "recommendations": [
+        {
+          "id": "hz-001",
+          "ota_source": "ctrip",
+          "name": "杭州西湖国宾馆",
+          "name_en": "West Lake State Guest House",
+          "latitude": 30.2456,
+          "longitude": 120.1389,
+          "address": "杭州市西湖区杨公堤18号",
+          "city": "杭州",
+          "district": "西湖区",
+          "rating": 4.9,
+          "review_count": 3420,
+          "price_per_night": 1680,
+          "amenities": [
+            "免费WiFi",
+            "游泳池",
+            "SPA",
+            "湖景餐厅",
+            "健身房"
+          ],
+          "tags": [
+            "湖景",
+            "奢华",
+            "历史建筑",
+            "园林"
+          ],
+          "distance_from_center": 3.5,
+          "xiaohongshu_credibility_score": 50,
+          "xiaohongshu_mentions": 0
+        },
+        {
+          "id": "hz-002",
+          "ota_source": "meituan",
+          "name": "杭州千岛湖洲际度假酒店",
+          "name_en": "InterContinental Qiandao Lake",
+          "latitude": 29.5989,
+          "longitude": 119.0334,
+          "address": "杭州市淳安县千岛湖镇万向路",
+          "city": "杭州",
+          "district": "淳安县",
+          "rating": 4.8,
+          "review_count": 5680,
+          "price_per_night": 980,
+          "amenities": [
+            "免费WiFi",
+            "无边泳池",
+            "儿童乐园",
+            "水上运动"
+          ],
+          "tags": [
+            "湖景",
+            "亲子",
+            "度假",
+            "网红"
+          ],
+          "distance_from_center": 120,
+          "xiaohongshu_credibility_score": 50,
+          "xiaohongshu_mentions": 0
+        },
+        {
+          "id": "hz-003",
+          "ota_source": "ctrip",
+          "name": "杭州法云安缦",
+          "name_en": "Amanfayun",
+          "latitude": 30.2356,
+          "longitude": 120.0987,
+          "address": "杭州市西湖区法云弄22号",
+          "city": "杭州",
+          "district": "西湖区",
+          "rating": 4.9,
+          "review_count": 1280,
+          "price_per_night": 5800,
+          "amenities": [
+            "SPA",
+            "茶室",
+            "私人管家",
+            "古法餐厅"
+          ],
+          "tags": [
+            "奢华",
+            "隐世",
+            "禅意",
+            "古建筑"
+          ],
+          "distance_from_center": 5.2,
+          "xiaohongshu_credibility_score": 50,
+          "xiaohongshu_mentions": 0
+        },
+        {
+          "id": "hz-004",
+          "ota_source": "booking",
+          "name": "杭州柏悦酒店",
+          "name_en": "Park Hyatt Hangzhou",
+          "latitude": 30.2567,
+          "longitude": 120.1689,
+          "address": "杭州市上城区钱江路1366号",
+          "city": "杭州",
+          "district": "上城区",
+          "rating": 4.7,
+          "review_count": 2890,
+          "price_per_night": 1380,
+          "amenities": [
+            "室内泳池",
+            "高空餐厅",
+            "行政酒廊",
+            "健身房"
+          ],
+          "tags": [
+            "城市景观",
+            "商务",
+            "现代",
+            "高空"
+          ],
+          "distance_from_center": 1.2,
+          "xiaohongshu_credibility_score": 50,
+          "xiaohongshu_mentions": 0
+        },
+        {
+          "id": "hz-005",
+          "ota_source": "meituan",
+          "name": "杭州西溪花间堂",
+          "name_en": "Huajiantang Xixi",
+          "latitude": 30.2789,
+          "longitude": 120.0789,
+          "address": "杭州市西湖区文二西路777号",
+          "city": "杭州",
+          "district": "西湖区",
+          "rating": 4.6,
+          "review_count": 4560,
+          "price_per_night": 680,
+          "amenities": [
+            "花园",
+            "茶室",
+            "自行车租赁",
+            "宠物友好"
+          ],
+          "tags": [
+            "湿地",
+            "文艺",
+            "宠物友好",
+            "自然"
+          ],
+          "distance_from_center": 8.0,
+          "xiaohongshu_credibility_score": 50,
+          "xiaohongshu_mentions": 0
+        }
+      ],
+      "reasoning": "基于杭州的家庭出游需求，筛选了6家酒店，已结合小红书真实口碑过滤水军内容。",
+      "total_found": 6
+    },
+    "restaurant": {
+      "status": "completed",
+      "agent_type": "restaurant",
+      "agent_name": "餐饮推荐Agent",
+      "recommendations": [
+        {
+          "id": "hz-r001",
+          "name": "楼外楼",
+          "latitude": 30.2589,
+          "longitude": 120.1489,
+          "address": "杭州市西湖区孤山路30号",
+          "city": "杭州",
+          "district": "西湖区",
+          "cuisine": "杭帮菜",
+          "price_level": "medium",
+          "price_per_person": 150,
+          "rating": 4.5,
+          "review_count": 8900,
+          "tags": [
+            "老字号",
+            "西湖醋鱼",
+            "百年老店",
+            "必吃"
+          ],
+          "signature_dishes": [
+            "西湖醋鱼",
+            "龙井虾仁",
+            "东坡肉",
+            "叫花鸡"
+          ],
+          "business_hours": "10:00-21:00",
+          "xiaohongshu_mentions": 1,
+          "xiaohongshu_score": 72,
+          "xiaohongshu_credibility_score": 25.0
+        },
+        {
+          "id": "hz-r002",
+          "name": "知味观",
+          "latitude": 30.2589,
+          "longitude": 120.1589,
+          "address": "杭州市上城区延安路249号",
+          "city": "杭州",
+          "district": "上城区",
+          "cuisine": "杭帮菜/小吃",
+          "price_level": "low",
+          "price_per_person": 60,
+          "rating": 4.6,
+          "review_count": 12000,
+          "tags": [
+            "老字号",
+            "小吃",
+            "性价比",
+            "非遗"
+          ],
+          "signature_dishes": [
+            "小笼包",
+            "猫耳朵",
+            "片儿川",
+            "荷花酥"
+          ],
+          "business_hours": "07:00-21:00",
+          "xiaohongshu_mentions": 1,
+          "xiaohongshu_score": 78,
+          "xiaohongshu_credibility_score": 25.0
+        }
+      ],
+      "reasoning": "精选杭州必吃美食，已过滤小红书水军内容",
+      "total_found": 2
+    },
+    "attraction": {
+      "status": "completed",
+      "agent_type": "attraction",
+      "agent_name": "景点推荐Agent",
+      "recommendations": [
+        {
+          "id": "hz-a001",
+          "name": "西湖风景区",
+          "description": "中国十大风景名胜之一，以湖光山色和众多名胜古迹闻名中外。",
+          "latitude": 30.2489,
+          "longitude": 120.1489,
+          "address": "杭州市西湖区龙井路1号",
+          "city": "杭州",
+          "district": "西湖区",
+          "category": "自然风光",
+          "subcategory": "湖泊",
+          "rating": 4.9,
+          "review_count": 45000,
+          "visit_duration": 300,
+          "best_visit_time": "春秋两季，早晨或傍晚",
+          "ticket_price": 0,
+          "is_free": true,
+          "needs_booking": false,
+          "tags": [
+            "世界遗产",
+            "必游",
+            "环湖骑行",
+            "十景"
+          ],
+          "open_hours": "全天开放",
+          "xiaohongshu_mentions": 0,
+          "xiaohongshu_score": 92,
+          "xiaohongshu_credibility_score": 50
+        },
+        {
+          "id": "hz-a002",
+          "name": "灵隐寺",
+          "description": "千年古刹，中国佛教禅宗名刹之一，背靠北高峰，面朝飞来峰。",
+          "latitude": 30.2389,
+          "longitude": 120.0989,
+          "address": "杭州市西湖区灵隐路法云弄1号",
+          "city": "杭州",
+          "district": "西湖区",
+          "category": "历史人文",
+          "subcategory": "寺庙",
+          "rating": 4.7,
+          "review_count": 23000,
+          "visit_duration": 180,
+          "best_visit_time": "早晨，人少清净",
+          "ticket_price": 75,
+          "is_free": false,
+          "needs_booking": true,
+          "tags": [
+            "千年古刹",
+            "祈福",
+            "飞来峰",
+            "素斋"
+          ],
+          "open_hours": "07:00-18:00",
+          "xiaohongshu_mentions": 1,
+          "xiaohongshu_score": 82,
+          "xiaohongshu_credibility_score": 92.0
+        },
+        {
+          "id": "hz-a003",
+          "name": "千岛湖",
+          "description": "国家5A级旅游景区，因湖内拥有1078座翠岛而得名。",
+          "latitude": 29.5989,
+          "longitude": 119.0334,
+          "address": "杭州市淳安县千岛湖镇",
+          "city": "杭州",
+          "district": "淳安县",
+          "category": "自然风光",
+          "subcategory": "湖泊",
+          "rating": 4.6,
+          "review_count": 18900,
+          "visit_duration": 480,
+          "best_visit_time": "夏季，水上项目丰富",
+          "ticket_price": 150,
+          "is_free": false,
+          "needs_booking": true,
+          "tags": [
+            "5A景区",
+            "水上运动",
+            "氧吧",
+            "度假"
+          ],
+          "open_hours": "08:00-17:00",
+          "xiaohongshu_mentions": 1,
+          "xiaohongshu_score": 75,
+          "xiaohongshu_credibility_score": 78.0
+        },
+        {
+          "id": "hz-a004",
+          "name": "宋城",
+          "description": "大型宋代文化主题乐园，以《宋城千古情》演出闻名。",
+          "latitude": 30.1889,
+          "longitude": 120.1189,
+          "address": "杭州市西湖区之江路148号",
+          "city": "杭州",
+          "district": "西湖区",
+          "category": "主题乐园",
+          "subcategory": "文化主题",
+          "rating": 4.5,
+          "review_count": 15600,
+          "visit_duration": 360,
+          "best_visit_time": "下午到夜晚，看演出",
+          "ticket_price": 320,
+          "is_free": false,
+          "needs_booking": true,
+          "tags": [
+            "千古情",
+            "演出",
+            "穿越",
+            "亲子"
+          ],
+          "open_hours": "10:00-21:00",
+          "xiaohongshu_mentions": 0,
+          "xiaohongshu_score": 70,
+          "xiaohongshu_credibility_score": 50
+        },
+        {
+          "id": "hz-a005",
+          "name": "西溪国家湿地公园",
+          "description": "中国首个国家湿地公园，电影《非诚勿扰》取景地。",
+          "latitude": 30.2789,
+          "longitude": 120.0789,
+          "address": "杭州市西湖区天目山路518号",
+          "city": "杭州",
+          "district": "西湖区",
+          "category": "自然风光",
+          "subcategory": "湿地",
+          "rating": 4.6,
+          "review_count": 12300,
+          "visit_duration": 240,
+          "best_visit_time": "春秋，花朝节和火柿节",
+          "ticket_price": 80,
+          "is_free": false,
+          "needs_booking": false,
+          "tags": [
+            "湿地",
+            "非诚勿扰",
+            "摇橹船",
+            "生态"
+          ],
+          "open_hours": "08:00-17:30",
+          "xiaohongshu_mentions": 1,
+          "xiaohongshu_score": 78,
+          "xiaohongshu_credibility_score": 88.0
+        }
+      ],
+      "altitude_risk": [],
+      "reasoning": "精选杭州经典游览路线，已评估海拔风险与游览时间合理性",
+      "total_found": 5
+    },
+    "transport": {
+      "status": "completed",
+      "agent_type": "transport",
+      "agent_name": "交通规划Agent",
+      "recommendations": [
+        {
+          "id": "rental-7924",
+          "type": "rental",
+          "origin": "上海市区",
+          "destination": "杭州市区",
+          "departure_time": "2026-06-01 08:00",
+          "arrival_time": "2026-06-01 10:30",
+          "duration": 150,
+          "price": 444,
+          "operator": "神州租车",
+          "transport_no": "经济型轿车",
+          "available": true,
+          "tags": [
+            "自由灵活",
+            "沿途风景",
+            "适合家庭"
+          ]
+        }
+      ],
+      "reasoning": "推荐上海至杭州的2人出行方案，已按舒适度与性价比综合排序",
+      "total_found": 1
+    },
+    "risk": {
+      "status": "completed",
+      "agent_type": "risk",
+      "agent_name": "风控专家Agent",
+      "warnings": [
+        {
+          "type": "quality",
+          "level": "medium",
+          "message": "2家推荐餐厅的小红书口碑存在水军嫌疑",
+          "suggestion": "已自动降低此类内容的推荐权重，建议参考本地用户评价",
+          "related_item": "楼外楼"
+        }
+      ],
+      "is_safe": true,
+      "summary": "发现1个注意事项，请查看详情"
+    }
+  },
+  "timing": {
+    "total_duration": 3338
+  },
+  "message": "已完成您的旅行规划！共协调5个智能Agent，耗时3338ms"
+}

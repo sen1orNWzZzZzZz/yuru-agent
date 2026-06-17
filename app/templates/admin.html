@@ -1,0 +1,1082 @@
+{% extends "base.html" %}
+
+{% block title %}系统管理 - 智能旅游多Agent规划系统{% endblock %}
+
+{% block nav_links %}
+<a href="/" class="nav-link">首页</a>
+<a href="/planning" class="nav-link">协作看板</a>
+<a href="/itinerary" class="nav-link">行程结果</a>
+<a href="/admin" class="nav-link active">系统管理</a>
+{% endblock %}
+
+{% block content %}
+<div class="admin-container">
+    <!-- 页面头部 -->
+    <section class="admin-header">
+        <h1>系统管理</h1>
+        <p class="subtitle">配置LLM API、管理系统参数、查看运行状态</p>
+    </section>
+
+    <!-- 状态卡片 -->
+    <section class="status-cards">
+        <div class="status-card" id="llmStatusCard">
+            <div class="status-icon">🤖</div>
+            <div class="status-info">
+                <h3>LLM 状态</h3>
+                <p class="status-value" id="llmStatusText">{% if has_llm %}已启用{% else %}未配置{% endif %}</p>
+                <p class="status-detail" id="llmModelText">{{ model_name }}</p>
+            </div>
+        </div>
+        <div class="status-card">
+            <div class="status-icon">📊</div>
+            <div class="status-info">
+                <h3>Agent 数量</h3>
+                <p class="status-value">6</p>
+                <p class="status-detail">调度器+4推荐+风控</p>
+            </div>
+        </div>
+        <div class="status-card">
+            <div class="status-icon">🗂️</div>
+            <div class="status-info">
+                <h3>Mock 城市</h3>
+                <p class="status-value">15</p>
+                <p class="status-detail">覆盖热门目的地</p>
+            </div>
+        </div>
+        <div class="status-card">
+            <div class="status-icon">🔒</div>
+            <div class="status-info">
+                <h3>安全过滤</h3>
+                <p class="status-value">已启用</p>
+                <p class="status-detail">反水军+风控检测</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- LLM配置管理 -->
+    <section class="admin-section">
+        <div class="section-header">
+            <h2>🤖 LLM API 配置</h2>
+            <p class="section-desc">配置大语言模型API，支持OpenAI格式（兼容SiliconFlow、Azure、自托管等）</p>
+        </div>
+
+        <!-- 配置列表 -->
+        <div class="config-list-section">
+            <div class="subsection-header">
+                <h3>已保存的配置</h3>
+                <button class="btn btn-primary" onclick="showAddForm()">+ 新增配置</button>
+            </div>
+            <div class="config-table-wrapper">
+                <table class="config-table" id="configTable">
+                    <thead>
+                        <tr>
+                            <th>名称</th>
+                            <th>模型</th>
+                            <th>Base URL</th>
+                            <th>API Key</th>
+                            <th>温度</th>
+                            <th>Max Tokens</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="configTableBody">
+                        <tr class="empty-row">
+                            <td colspan="8">暂无配置，请点击"新增配置"添加</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 新增/编辑表单 -->
+        <div class="config-form-section" id="configFormSection" style="display: none;">
+            <div class="subsection-header">
+                <h3 id="formTitle">新增配置</h3>
+            </div>
+            <form class="config-form" id="llmConfigForm" onsubmit="return saveConfig(event)">
+                <input type="hidden" id="configId" value="">
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="configName">配置名称 <span class="required">*</span></label>
+                        <input type="text" id="configName" name="name" placeholder="如：默认配置、GPT-4、SiliconFlow" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="apiKey">API Key <span class="required">*</span></label>
+                        <input type="password" id="apiKey" name="api_key" placeholder="sk-xxxxxxxxxxxxxxxx" required>
+                        <small class="form-help">支持OpenAI格式API Key</small>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group flex-2">
+                        <label for="baseUrl">Base URL</label>
+                        <input type="url" id="baseUrl" name="base_url" value="https://api.openai.com/v1" placeholder="https://api.openai.com/v1">
+                        <small class="form-help">兼容任意OpenAI格式端点：SiliconFlow、Azure、自托管等</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="modelName">模型名称</label>
+                        <input type="text" id="modelName" name="model_name" value="gpt-4o-mini" placeholder="gpt-4o-mini">
+                        <small class="form-help">如：gpt-4o-mini、Qwen/Qwen2.5-72B-Instruct</small>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="temperature">Temperature (0-2)</label>
+                        <input type="range" id="temperature" name="temperature" min="0" max="2" step="0.1" value="0.7" oninput="document.getElementById('tempValue').textContent = this.value">
+                        <div class="range-labels">
+                            <span>精确</span>
+                            <span id="tempValue" class="current-value">0.7</span>
+                            <span>创意</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="maxTokens">Max Tokens (256-8192)</label>
+                        <input type="number" id="maxTokens" name="max_tokens" value="4096" min="256" max="8192" step="256">
+                    </div>
+                    <div class="form-group">
+                        <label for="timeout">超时时间 (秒)</label>
+                        <input type="number" id="timeout" name="timeout" value="60" min="5" max="300">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="isActive" name="is_active" checked>
+                            <span class="checkmark"></span>
+                            设为当前激活配置
+                        </label>
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="useLlm" name="use_llm" checked>
+                            <span class="checkmark"></span>
+                            启用LLM（关闭则使用Mock模式）
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="description">配置说明</label>
+                    <textarea id="description" name="description" rows="2" placeholder="可选，描述此配置的用途"></textarea>
+                </div>
+
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="hideForm()">取消</button>
+                    <button type="button" class="btn btn-info" onclick="testConnection()">🔌 测试连接</button>
+                    <button type="submit" class="btn btn-primary">💾 保存配置</button>
+                </div>
+            </form>
+
+            <!-- 连接测试结果 -->
+            <div class="test-result" id="testResult" style="display: none;"></div>
+        </div>
+
+        <!-- 使用说明 -->
+        <div class="tips-section">
+            <h4>📖 使用说明</h4>
+            <div class="tips-grid">
+                <div class="tip-card">
+                    <h5>OpenAI 官方</h5>
+                    <p>Base URL: <code>https://api.openai.com/v1</code></p>
+                    <p>模型: <code>gpt-4o-mini</code> / <code>gpt-4o</code></p>
+                </div>
+                <div class="tip-card">
+                    <h5>SiliconFlow</h5>
+                    <p>Base URL: <code>https://api.siliconflow.cn/v1</code></p>
+                    <p>模型: <code>Qwen/Qwen2.5-72B-Instruct</code></p>
+                </div>
+                <div class="tip-card">
+                    <h5>自托管 (vLLM)</h5>
+                    <p>Base URL: <code>http://localhost:8000/v1</code></p>
+                    <p>模型: <code>部署时指定的模型名</code></p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Agent状态 -->
+    <section class="admin-section">
+        <div class="section-header">
+            <h2>🔧 Agent 运行状态</h2>
+            <p class="section-desc">各Agent的功能说明与当前模式</p>
+        </div>
+        <div class="agent-status-grid">
+            <div class="agent-card">
+                <div class="agent-header">
+                    <span class="agent-icon">🎯</span>
+                    <div>
+                        <h4>中央调度器</h4>
+                        <span class="agent-type">coordinator</span>
+                    </div>
+                </div>
+                <p class="agent-desc">解析用户自然语言需求，提取目的地、预算、人数、风格等关键参数</p>
+                <div class="agent-meta">
+                    <span class="badge badge-primary">入口Agent</span>
+                    <span class="badge badge-info">串行执行</span>
+                </div>
+            </div>
+            <div class="agent-card">
+                <div class="agent-header">
+                    <span class="agent-icon">🏨</span>
+                    <div>
+                        <h4>酒店推荐</h4>
+                        <span class="agent-type">hotel</span>
+                    </div>
+                </div>
+                <p class="agent-desc">根据预算、人数、风格推荐酒店，自动补充小红书口碑数据</p>
+                <div class="agent-meta">
+                    <span class="badge badge-primary">推荐Agent</span>
+                    <span class="badge badge-success">并行执行</span>
+                </div>
+            </div>
+            <div class="agent-card">
+                <div class="agent-header">
+                    <span class="agent-icon">🍜</span>
+                    <div>
+                        <h4>餐饮推荐</h4>
+                        <span class="agent-type">restaurant</span>
+                    </div>
+                </div>
+                <p class="agent-desc">基于酒店锚点的空间智能推荐，覆盖3km半径内的特色餐厅</p>
+                <div class="agent-meta">
+                    <span class="badge badge-primary">推荐Agent</span>
+                    <span class="badge badge-success">并行执行</span>
+                </div>
+            </div>
+            <div class="agent-card">
+                <div class="agent-header">
+                    <span class="agent-icon">🏔️</span>
+                    <div>
+                        <h4>景点推荐</h4>
+                        <span class="agent-type">attraction</span>
+                    </div>
+                </div>
+                <p class="agent-desc">按旅行风格筛选景点，自动评估高反风险，标注游览时长</p>
+                <div class="agent-meta">
+                    <span class="badge badge-primary">推荐Agent</span>
+                    <span class="badge badge-success">并行执行</span>
+                </div>
+            </div>
+            <div class="agent-card">
+                <div class="agent-header">
+                    <span class="agent-icon">✈️</span>
+                    <div>
+                        <h4>交通规划</h4>
+                        <span class="agent-type">transport</span>
+                    </div>
+                </div>
+                <p class="agent-desc">生成飞机/高铁/自驾方案，支持按速度/价格/舒适度排序</p>
+                <div class="agent-meta">
+                    <span class="badge badge-primary">推荐Agent</span>
+                    <span class="badge badge-success">并行执行</span>
+                </div>
+            </div>
+            <div class="agent-card">
+                <div class="agent-header">
+                    <span class="agent-icon">🛡️</span>
+                    <div>
+                        <h4>风控专家</h4>
+                        <span class="agent-type">risk</span>
+                    </div>
+                </div>
+                <p class="agent-desc">检测价格异常、高反风险、水军内容、时间冲突等问题</p>
+                <div class="agent-meta">
+                    <span class="badge badge-warning">风控Agent</span>
+                    <span class="badge badge-info">串行执行</span>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ==================== 全局状态 ====================
+let currentConfigs = [];
+let editingId = null;
+
+// ==================== 页面加载 ====================
+document.addEventListener('DOMContentLoaded', () => {
+    loadConfigs();
+    loadStatus();
+});
+
+// ==================== 配置管理 ====================
+
+async function loadConfigs() {
+    try {
+        const res = await fetch('/api/admin/llm/config');
+        const data = await res.json();
+        currentConfigs = data.data || [];
+        renderConfigTable();
+    } catch (e) {
+        console.error('加载配置失败:', e);
+        showNotification('加载配置失败: ' + e.message, 'error');
+    }
+}
+
+async function loadStatus() {
+    try {
+        const res = await fetch('/api/admin/llm/status');
+        const data = await res.json();
+        if (data.success && data.data) {
+            const llmStatusText = document.getElementById('llmStatusText');
+            const llmModelText = document.getElementById('llmModelText');
+            llmStatusText.textContent = data.data.enabled ? '已启用' : '已禁用';
+            llmStatusText.className = 'status-value ' + (data.data.enabled ? 'status-on' : 'status-off');
+            llmModelText.textContent = data.data.model || '未配置';
+        }
+    } catch (e) {
+        console.error('加载状态失败:', e);
+    }
+}
+
+function renderConfigTable() {
+    const tbody = document.getElementById('configTableBody');
+    if (!currentConfigs || currentConfigs.length === 0) {
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="8">暂无配置，请点击"新增配置"添加</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = currentConfigs.map(cfg => `
+        <tr data-id="${cfg.id}">
+            <td><strong>${escapeHtml(cfg.name)}</strong></td>
+            <td><code>${escapeHtml(cfg.model_name)}</code></td>
+            <td class="truncate">${escapeHtml(cfg.base_url)}</td>
+            <td><span class="masked-key">${escapeHtml(cfg.api_key)}</span></td>
+            <td>${cfg.temperature}</td>
+            <td>${cfg.max_tokens}</td>
+            <td>
+                ${cfg.is_active ? '<span class="badge badge-success">激活</span>' : '<span class="badge badge-secondary">未激活</span>'}
+                ${cfg.use_llm ? '' : '<span class="badge badge-warning">Mock</span>'}
+            </td>
+            <td>
+                <button class="btn-icon" onclick="editConfig(${cfg.id})" title="编辑">✏️</button>
+                <button class="btn-icon" onclick="deleteConfig(${cfg.id})" title="删除">🗑️</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function showAddForm() {
+    editingId = null;
+    document.getElementById('formTitle').textContent = '新增配置';
+    document.getElementById('llmConfigForm').reset();
+    document.getElementById('configId').value = '';
+    document.getElementById('baseUrl').value = 'https://api.openai.com/v1';
+    document.getElementById('modelName').value = 'gpt-4o-mini';
+    document.getElementById('temperature').value = 0.7;
+    document.getElementById('tempValue').textContent = '0.7';
+    document.getElementById('maxTokens').value = 4096;
+    document.getElementById('timeout').value = 60;
+    document.getElementById('isActive').checked = true;
+    document.getElementById('useLlm').checked = true;
+    document.getElementById('testResult').style.display = 'none';
+    document.getElementById('configFormSection').style.display = 'block';
+    document.getElementById('configFormSection').scrollIntoView({ behavior: 'smooth' });
+}
+
+function hideForm() {
+    document.getElementById('configFormSection').style.display = 'none';
+    document.getElementById('testResult').style.display = 'none';
+}
+
+async function editConfig(id) {
+    const cfg = currentConfigs.find(c => c.id === id);
+    if (!cfg) return;
+
+    editingId = id;
+    document.getElementById('formTitle').textContent = '编辑配置';
+    document.getElementById('configId').value = id;
+    document.getElementById('configName').value = cfg.name;
+    document.getElementById('apiKey').value = '';
+    document.getElementById('baseUrl').value = cfg.base_url;
+    document.getElementById('modelName').value = cfg.model_name;
+    document.getElementById('temperature').value = cfg.temperature;
+    document.getElementById('tempValue').textContent = cfg.temperature;
+    document.getElementById('maxTokens').value = cfg.max_tokens;
+    document.getElementById('timeout').value = cfg.timeout;
+    document.getElementById('isActive').checked = cfg.is_active;
+    document.getElementById('useLlm').checked = cfg.use_llm;
+    document.getElementById('description').value = cfg.description || '';
+    document.getElementById('testResult').style.display = 'none';
+    document.getElementById('configFormSection').style.display = 'block';
+    document.getElementById('configFormSection').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function saveConfig(event) {
+    event.preventDefault();
+    const form = document.getElementById('llmConfigForm');
+    const formData = new FormData(form);
+
+    const payload = {
+        name: formData.get('name'),
+        api_key: formData.get('api_key'),
+        base_url: formData.get('base_url') || 'https://api.openai.com/v1',
+        model_name: formData.get('model_name') || 'gpt-4o-mini',
+        temperature: parseFloat(formData.get('temperature') || 0.7),
+        max_tokens: parseInt(formData.get('max_tokens') || 4096),
+        timeout: parseInt(formData.get('timeout') || 60),
+        is_active: formData.has('is_active'),
+        use_llm: formData.has('use_llm'),
+        description: formData.get('description') || null,
+    };
+
+    try {
+        const url = editingId ? `/api/admin/llm/config/${editingId}` : '/api/admin/llm/config';
+        const method = editingId ? 'PUT' : 'POST';
+        const res = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            showNotification(editingId ? '配置更新成功' : '配置创建成功', 'success');
+            hideForm();
+            await loadConfigs();
+            await loadStatus();
+        } else {
+            showNotification(data.message || '保存失败', 'error');
+        }
+    } catch (e) {
+        showNotification('保存失败: ' + e.message, 'error');
+    }
+    return false;
+}
+
+async function deleteConfig(id) {
+    if (!confirm('确定要删除此配置吗？')) return;
+
+    try {
+        const res = await fetch(`/api/admin/llm/config/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+
+        if (data.success) {
+            showNotification('配置已删除', 'success');
+            await loadConfigs();
+            await loadStatus();
+        } else {
+            showNotification(data.message || '删除失败', 'error');
+        }
+    } catch (e) {
+        showNotification('删除失败: ' + e.message, 'error');
+    }
+}
+
+async function testConnection() {
+    const formData = new FormData(document.getElementById('llmConfigForm'));
+    const testResult = document.getElementById('testResult');
+    testResult.style.display = 'block';
+    testResult.innerHTML = '<p>⏳ 正在测试连接...</p>';
+
+    const payload = {
+        api_key: formData.get('api_key'),
+        base_url: formData.get('base_url') || 'https://api.openai.com/v1',
+        model_name: formData.get('model_name') || 'gpt-4o-mini',
+        temperature: parseFloat(formData.get('temperature') || 0.7),
+        max_tokens: 100,
+        timeout: parseInt(formData.get('timeout') || 60),
+    };
+
+    try {
+        const res = await fetch('/api/admin/llm/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            testResult.className = 'test-result success';
+            testResult.innerHTML = `
+                <h4>✅ 连接成功</h4>
+                <p>模型: <code>${escapeHtml(data.data.model)}</code></p>
+                <p>延迟: ${data.data.latency_ms}ms</p>
+                <p>响应预览: "${escapeHtml(data.data.response_preview || '')}"</p>
+            `;
+        } else {
+            testResult.className = 'test-result error';
+            testResult.innerHTML = `
+                <h4>❌ 连接失败</h4>
+                <p>${escapeHtml(data.message)}</p>
+            `;
+        }
+    } catch (e) {
+        testResult.className = 'test-result error';
+        testResult.innerHTML = `
+            <h4>❌ 请求异常</h4>
+            <p>${escapeHtml(e.message)}</p>
+        `;
+    }
+}
+
+// ==================== 工具函数 ====================
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function showNotification(message, type = 'info') {
+    const notif = document.createElement('div');
+    notif.className = `notification ${type}`;
+    notif.textContent = message;
+    document.body.appendChild(notif);
+    setTimeout(() => {
+        notif.style.opacity = '0';
+        setTimeout(() => notif.remove(), 300);
+    }, 3000);
+}
+</script>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+/* ==================== 管理页面样式 ==================== */
+.admin-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.admin-header {
+    margin-bottom: 30px;
+}
+
+.admin-header h1 {
+    font-size: 2rem;
+    color: #1a1a2e;
+    margin-bottom: 8px;
+}
+
+.subtitle {
+    color: #666;
+}
+
+/* 状态卡片 */
+.status-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+    margin-bottom: 30px;
+}
+
+.status-card {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    transition: transform 0.2s;
+}
+
+.status-card:hover {
+    transform: translateY(-2px);
+}
+
+.status-icon {
+    font-size: 2rem;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f8f9fa;
+    border-radius: 12px;
+}
+
+.status-info h3 {
+    font-size: 0.85rem;
+    color: #888;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+
+.status-value {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 2px;
+}
+
+.status-value.status-on { color: #27ae60; }
+.status-value.status-off { color: #e74c3c; }
+
+.status-detail {
+    font-size: 0.75rem;
+    color: #aaa;
+}
+
+/* 管理区块 */
+.admin-section {
+    background: white;
+    border-radius: 12px;
+    padding: 28px;
+    margin-bottom: 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.section-header {
+    margin-bottom: 24px;
+}
+
+.section-header h2 {
+    font-size: 1.3rem;
+    color: #1a1a2e;
+    margin-bottom: 6px;
+}
+
+.section-desc {
+    font-size: 0.85rem;
+    color: #888;
+}
+
+.subsection-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.subsection-header h3 {
+    font-size: 1.05rem;
+    color: #333;
+}
+
+/* 配置表格 */
+.config-table-wrapper {
+    overflow-x: auto;
+    border: 1px solid #eee;
+    border-radius: 8px;
+}
+
+.config-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.config-table th {
+    background: #f8f9fa;
+    padding: 12px 16px;
+    text-align: left;
+    font-weight: 600;
+    color: #555;
+    border-bottom: 1px solid #eee;
+    white-space: nowrap;
+}
+
+.config-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid #f0f0f0;
+    vertical-align: middle;
+}
+
+.config-table tr:last-child td {
+    border-bottom: none;
+}
+
+.config-table tr:hover td {
+    background: #fafbfc;
+}
+
+.empty-row td {
+    text-align: center;
+    color: #999;
+    padding: 32px;
+}
+
+.masked-key {
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: #888;
+    background: #f5f5f5;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.truncate {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 表单 */
+.config-form-section {
+    background: #fafbfc;
+    border-radius: 8px;
+    padding: 24px;
+    margin-top: 24px;
+    border: 1px solid #e8e8e8;
+}
+
+.config-form .form-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.config-form .form-group {
+    flex: 1;
+    min-width: 200px;
+}
+
+.config-form .form-group.flex-2 {
+    flex: 2;
+}
+
+.config-form label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #444;
+    margin-bottom: 6px;
+}
+
+.config-form .required {
+    color: #e74c3c;
+}
+
+.config-form input[type="text"],
+.config-form input[type="password"],
+.config-form input[type="url"],
+.config-form input[type="number"],
+.config-form select,
+.config-form textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    transition: border-color 0.2s;
+    box-sizing: border-box;
+}
+
+.config-form input:focus,
+.config-form select:focus,
+.config-form textarea:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.config-form input[type="range"] {
+    width: 100%;
+    margin: 8px 0;
+}
+
+.range-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: #888;
+}
+
+.range-labels .current-value {
+    color: #667eea;
+    font-weight: 600;
+}
+
+.form-help {
+    font-size: 0.75rem;
+    color: #999;
+    margin-top: 4px;
+    display: block;
+}
+
+/* 复选框 */
+.checkbox-group {
+    display: flex;
+    align-items: center;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #444;
+}
+
+.checkbox-label input {
+    display: none;
+}
+
+.checkmark {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #ccc;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.checkbox-label input:checked + .checkmark {
+    background: #667eea;
+    border-color: #667eea;
+}
+
+.checkbox-label input:checked + .checkmark::after {
+    content: '✓';
+    color: white;
+    font-size: 12px;
+}
+
+/* 按钮 */
+.form-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid #eee;
+}
+
+.btn {
+    padding: 10px 20px;
+    border-radius: 6px;
+    border: none;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.btn-secondary {
+    background: #f0f0f0;
+    color: #555;
+}
+
+.btn-secondary:hover {
+    background: #e0e0e0;
+}
+
+.btn-info {
+    background: #e3f2fd;
+    color: #1976d2;
+}
+
+.btn-info:hover {
+    background: #bbdefb;
+}
+
+.btn-icon {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 1rem;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+
+.btn-icon:hover {
+    opacity: 1;
+}
+
+/* 连接测试结果 */
+.test-result {
+    margin-top: 16px;
+    padding: 16px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+}
+
+.test-result.success {
+    background: #e8f5e9;
+    border: 1px solid #a5d6a7;
+    color: #2e7d32;
+}
+
+.test-result.error {
+    background: #ffebee;
+    border: 1px solid #ef9a9a;
+    color: #c62828;
+}
+
+.test-result h4 {
+    margin-bottom: 8px;
+    font-size: 1rem;
+}
+
+/* 提示区块 */
+.tips-section {
+    margin-top: 24px;
+    padding-top: 24px;
+    border-top: 1px solid #eee;
+}
+
+.tips-section h4 {
+    font-size: 1rem;
+    color: #444;
+    margin-bottom: 16px;
+}
+
+.tips-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 12px;
+}
+
+.tip-card {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 16px;
+    font-size: 0.85rem;
+}
+
+.tip-card h5 {
+    font-size: 0.9rem;
+    color: #333;
+    margin-bottom: 8px;
+}
+
+.tip-card p {
+    color: #666;
+    margin-bottom: 4px;
+}
+
+.tip-card code {
+    background: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    color: #667eea;
+}
+
+/* Agent状态卡片 */
+.agent-status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+}
+
+.agent-card {
+    background: #fafbfc;
+    border: 1px solid #eee;
+    border-radius: 10px;
+    padding: 20px;
+    transition: all 0.2s;
+}
+
+.agent-card:hover {
+    border-color: #667eea;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
+}
+
+.agent-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.agent-icon {
+    font-size: 1.8rem;
+}
+
+.agent-header h4 {
+    font-size: 1rem;
+    color: #333;
+}
+
+.agent-type {
+    font-size: 0.75rem;
+    color: #888;
+    font-family: monospace;
+}
+
+.agent-desc {
+    font-size: 0.85rem;
+    color: #666;
+    line-height: 1.5;
+    margin-bottom: 12px;
+}
+
+.agent-meta {
+    display: flex;
+    gap: 8px;
+}
+
+/* 标签 */
+.badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.badge-success { background: #e8f5e9; color: #2e7d32; }
+.badge-primary { background: #e3f2fd; color: #1565c0; }
+.badge-info { background: #e0f7fa; color: #00838f; }
+.badge-warning { background: #fff3e0; color: #e65100; }
+.badge-secondary { background: #f5f5f5; color: #757575; }
+
+/* 通知 */
+.notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    z-index: 9999;
+    animation: slideIn 0.3s ease;
+    transition: opacity 0.3s;
+}
+
+.notification.success { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+.notification.error { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
+.notification.info { background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }
+
+@keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+    .config-form .form-row {
+        flex-direction: column;
+    }
+    .status-cards {
+        grid-template-columns: 1fr;
+    }
+    .agent-status-grid {
+        grid-template-columns: 1fr;
+    }
+    .admin-section {
+        padding: 16px;
+    }
+}
+</style>
+{% endblock %}
