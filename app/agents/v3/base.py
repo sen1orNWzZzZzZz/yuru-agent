@@ -76,9 +76,9 @@ class BaseAgentV3(ABC):
             usage = {}
             if self.use_llm:
                 llm_result = self._call_llm(context, db_data)
+                usage = llm_result.get("usage", {})
                 if llm_result.get("success"):
                     reasoning = llm_result.get("reasoning", "")
-                    usage = llm_result.get("usage", {})
                     # LLM可能给出筛选/排序建议
                     db_data = self._merge_llm_result(db_data, llm_result)
 
@@ -133,7 +133,7 @@ class BaseAgentV3(ABC):
                     return {"success": True, "usage": usage, **parsed}
                 # 非JSON返回，作为reasoning
                 return {"success": True, "usage": usage, "reasoning": result["content"][:500]}
-            return {"success": False, "error": result.get("error", "")}
+            return {"success": False, "error": result.get("error", ""), "usage": result.get("usage", {})}
         except Exception as e:
             logger.warning(f"[{self.agent_name}] LLM调用失败: {e}")
             return {"success": False, "error": str(e)}

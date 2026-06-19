@@ -1,0 +1,550 @@
+{% extends "base_v3.html" %}
+
+{% block title %}系统观测大盘 - 灵动旅心 V3{% endblock %}
+
+{% block extra_css %}
+<style>
+.dashboard-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 28px;
+}
+.dashboard-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.range-btn {
+    padding: 6px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.range-btn:hover { border-color: var(--accent-light); color: var(--text); }
+.range-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+.refresh-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.metric-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+    box-shadow: var(--shadow);
+    transition: var(--transition);
+}
+.metric-card:hover { box-shadow: var(--shadow-hover); }
+.metric-value {
+    font-size: 1.9rem;
+    font-weight: 600;
+    color: var(--accent);
+    font-family: var(--font-display);
+    line-height: 1.2;
+    margin-bottom: 6px;
+}
+.metric-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+.metric-delta {
+    font-size: 0.75rem;
+    margin-top: 8px;
+    color: var(--text-muted);
+}
+.dashboard-section {
+    margin-bottom: 28px;
+}
+.section-title {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.chart-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 24px;
+}
+.chart-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+    box-shadow: var(--shadow);
+}
+.chart-title {
+    font-weight: 500;
+    margin-bottom: 16px;
+    color: var(--text-primary);
+}
+.logs-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+}
+.logs-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+.logs-table-wrap {
+    max-height: 360px;
+    overflow-y: auto;
+}
+.status-badge-mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+@media (max-width: 900px) {
+    .chart-row, .logs-row { grid-template-columns: 1fr; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-header animate-fade-up">
+    <div>
+        <div class="heading-lg">系统观测大盘</div>
+        <p class="text-secondary">按层级查看系统运行状态、Agent 表现、LLM 消耗与请求明细</p>
+    </div>
+    <div class="dashboard-actions">
+        <a href="/admin" class="btn btn-secondary btn-sm">← 返回系统管理</a>
+        <div>
+            <button class="range-btn active" data-range="24h" onclick="setRange('24h')">近24小时</button>
+            <button class="range-btn" data-range="7d" onclick="setRange('7d')">近7天</button>
+            <button class="range-btn" data-range="30d" onclick="setRange('30d')">近30天</button>
+        </div>
+        <label class="refresh-toggle">
+            <input type="checkbox" id="autoRefresh" checked>
+            <span>自动刷新</span>
+        </label>
+    </div>
+</div>
+
+<!-- L1 全局概览 -->
+<div class="dashboard-section animate-fade-up animate-delay-1">
+    <div class="section-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <line x1="3" y1="9" x2="21" y2="9"/>
+            <line x1="9" y1="21" x2="9" y2="9"/>
+        </svg>
+        L1 全局概览
+    </div>
+    <div class="grid-4">
+        <div class="metric-card">
+            <div class="metric-value" id="metricTotalRequests">-</div>
+            <div class="metric-label">总请求数</div>
+            <div class="metric-delta" id="metricErrorRate">错误率 -</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value" id="metricAvgDuration">-</div>
+            <div class="metric-label">平均延迟(ms)</div>
+            <div class="metric-delta" id="metricP95Duration">P95 -</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value" id="metricCacheHitRate">-</div>
+            <div class="metric-label">缓存命中率</div>
+            <div class="metric-delta" id="metricCacheLatency">平均延迟 -ms</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value" id="metricAgentSuccess">-</div>
+            <div class="metric-label">Agent 成功率</div>
+            <div class="metric-delta" id="metricAgentCalls">调用 - 次</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value" id="metricTotalTokens">-</div>
+            <div class="metric-label">总 Token</div>
+            <div class="metric-delta" id="metricPromptTokens">Prompt -</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value" id="metricLlmCalls">-</div>
+            <div class="metric-label">LLM 调用次数</div>
+            <div class="metric-delta" id="metricCompletionTokens">Completion -</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value" id="metricActiveItineraries">-</div>
+            <div class="metric-label">行程数</div>
+            <div class="metric-delta">已生成</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-value" id="metricErrorRequests">-</div>
+            <div class="metric-label">错误请求</div>
+            <div class="metric-delta" id="metricSlowRequests">慢请求 -</div>
+        </div>
+    </div>
+</div>
+
+<!-- L2 趋势分析 -->
+<div class="dashboard-section animate-fade-up animate-delay-2">
+    <div class="section-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        L2 趋势分析
+    </div>
+    <div class="chart-row">
+        <div class="chart-card">
+            <div class="chart-title">Token 消耗趋势</div>
+            <canvas id="tokenTrendChart" height="120"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">请求量 / 错误 / 延迟趋势</div>
+            <canvas id="requestTrendChart" height="120"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- L3 细粒度分布 -->
+<div class="dashboard-section animate-fade-up animate-delay-3">
+    <div class="section-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M12 6v6l4 2"/>
+        </svg>
+        L3 细粒度分布
+    </div>
+    <div class="chart-row">
+        <div class="chart-card">
+            <div class="chart-title">Agent 调用占比</div>
+            <canvas id="agentPieChart" height="140"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Agent 成功率明细</div>
+            <div class="logs-table-wrap">
+                <table class="data-table" style="width:100%;font-size:0.85rem;">
+                    <thead>
+                        <tr><th>Agent</th><th>调用</th><th>成功</th><th>Token</th></tr>
+                    </thead>
+                    <tbody id="agentStatsBody">
+                        <tr><td colspan="4" style="text-align:center;color:var(--text-secondary);">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- L4 明细排查 -->
+<div class="dashboard-section animate-fade-up animate-delay-3">
+    <div class="section-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="8" y1="6" x2="21" y2="6"/>
+            <line x1="8" y1="12" x2="21" y2="12"/>
+            <line x1="8" y1="18" x2="21" y2="18"/>
+            <line x1="3" y1="6" x2="3.01" y2="6"/>
+            <line x1="3" y1="12" x2="3.01" y2="12"/>
+            <line x1="3" y1="18" x2="3.01" y2="18"/>
+        </svg>
+        L4 明细排查
+    </div>
+    <div class="logs-row">
+        <div class="logs-card">
+            <div class="chart-title">请求日志</div>
+            <div class="logs-table-wrap">
+                <table class="data-table" style="width:100%;font-size:0.82rem;">
+                    <thead>
+                        <tr><th>时间</th><th>Method</th><th>Path</th><th>Status</th><th>ms</th></tr>
+                    </thead>
+                    <tbody id="requestLogsBody">
+                        <tr><td colspan="5" style="text-align:center;color:var(--text-secondary);">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="logs-card">
+            <div class="chart-title">Agent 调用日志</div>
+            <div class="logs-table-wrap">
+                <table class="data-table" style="width:100%;font-size:0.82rem;">
+                    <thead>
+                        <tr><th>时间</th><th>Agent</th><th>状态</th><th>ms</th><th>实际Token</th><th>预估Token</th></tr>
+                    </thead>
+                    <tbody id="agentLogsBody">
+                        <tr><td colspan="6" style="text-align:center;color:var(--text-secondary);">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+let currentRange = '24h';
+let refreshTimer = null;
+let charts = {};
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadAll();
+    setupAutoRefresh();
+});
+
+function setupAutoRefresh() {
+    const toggle = document.getElementById('autoRefresh');
+    toggle.addEventListener('change', () => {
+        if (toggle.checked) startRefresh();
+        else stopRefresh();
+    });
+    startRefresh();
+}
+
+function startRefresh() {
+    stopRefresh();
+    refreshTimer = setInterval(loadAll, 30000);
+}
+
+function stopRefresh() {
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+}
+
+function setRange(range) {
+    currentRange = range;
+    document.querySelectorAll('.range-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.range === range);
+    });
+    loadAll();
+}
+
+async function loadAll() {
+    await Promise.all([
+        loadSummary(),
+        loadTrends(),
+        loadAgents(),
+        loadRequestLogs(),
+        loadAgentLogs(),
+    ]);
+}
+
+async function loadSummary() {
+    try {
+        const r = await apiGet(`/api/admin/dashboard/summary?range=${currentRange}`);
+        if (!r.success) return;
+        const d = r.data;
+        const req = d.requests || {};
+        const cache = d.cache || {};
+        const llm = d.llm || {};
+        const agents = d.agents || {};
+
+        document.getElementById('metricTotalRequests').textContent = req.total_requests || 0;
+        document.getElementById('metricErrorRate').textContent = '错误率 ' + ((req.error_rate || 0) * 100).toFixed(2) + '%';
+        document.getElementById('metricAvgDuration').textContent = (req.avg_duration_ms || 0).toFixed(1);
+        document.getElementById('metricP95Duration').textContent = 'P95 ' + (req.p95_duration_ms || 0).toFixed(1) + 'ms';
+        document.getElementById('metricCacheHitRate').textContent = ((cache.hit_rate || 0) * 100).toFixed(1) + '%';
+        document.getElementById('metricCacheLatency').textContent = '平均延迟 ' + (cache.avg_latency_ms || 0).toFixed(1) + 'ms';
+        document.getElementById('metricAgentSuccess').textContent = ((agents.success_rate || 0) * 100).toFixed(1) + '%';
+        document.getElementById('metricAgentCalls').textContent = '调用 ' + (agents.total_logs || 0) + ' 次';
+        document.getElementById('metricTotalTokens').textContent = (llm.total_tokens || 0).toLocaleString();
+        document.getElementById('metricPromptTokens').textContent = '实际 Prompt ' + (llm.total_prompt_tokens || 0).toLocaleString();
+        document.getElementById('metricLlmCalls').textContent = llm.call_count || 0;
+        document.getElementById('metricCompletionTokens').textContent = '预估 ' + (llm.estimated_total_tokens || 0).toLocaleString() +
+            ' （准确 ' + ((llm.estimate_accuracy || 0) * 100).toFixed(1) + '%）';
+        document.getElementById('metricActiveItineraries').textContent = d.itineraries || 0;
+        document.getElementById('metricErrorRequests').textContent = req.error_requests || 0;
+        document.getElementById('metricSlowRequests').textContent = '慢请求 ' + (req.slow_requests || 0);
+    } catch (e) { console.error('加载概览失败:', e); }
+}
+
+async function loadTrends() {
+    try {
+        const r = await apiGet(`/api/admin/dashboard/trends?range=${currentRange}`);
+        if (!r.success) return;
+        const d = r.data;
+        renderTokenTrendChart(d.token_trends || []);
+        renderRequestTrendChart(d.request_trends || []);
+    } catch (e) { console.error('加载趋势失败:', e); }
+}
+
+async function loadAgents() {
+    try {
+        const r = await apiGet(`/api/admin/dashboard/agents?range=${currentRange}`);
+        if (!r.success) return;
+        const d = r.data;
+        renderAgentPieChart(d.by_type || []);
+        renderAgentStats(d.by_type || []);
+    } catch (e) { console.error('加载Agent分布失败:', e); }
+}
+
+async function loadRequestLogs() {
+    try {
+        const r = await apiGet(`/api/admin/dashboard/requests?range=${currentRange}&limit=30`);
+        const tbody = document.getElementById('requestLogsBody');
+        if (!r.success || !r.data.length) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);">暂无记录</td></tr>';
+            return;
+        }
+        tbody.innerHTML = r.data.map(log => `
+            <tr>
+                <td>${new Date(log.created_at).toLocaleString()}</td>
+                <td>${log.method}</td>
+                <td title="${log.path}">${log.path.length > 28 ? log.path.slice(0, 28) + '...' : log.path}</td>
+                <td><span class="status-badge-mini ${log.status_code >= 400 ? 'status-err' : 'status-ok'}">${log.status_code || '-'}</span></td>
+                <td>${Math.round(log.duration_ms || 0)}</td>
+            </tr>
+        `).join('');
+    } catch (e) { console.error('加载请求日志失败:', e); }
+}
+
+async function loadAgentLogs() {
+    try {
+        const r = await apiGet(`/api/admin/dashboard/agent-logs?range=${currentRange}&limit=30`);
+        const tbody = document.getElementById('agentLogsBody');
+        if (!r.success || !r.data.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary);">暂无记录</td></tr>';
+            return;
+        }
+        tbody.innerHTML = r.data.map(log => `
+            <tr>
+                <td>${new Date(log.created_at).toLocaleString()}</td>
+                <td>${log.agent_type}</td>
+                <td><span class="status-badge-mini ${log.status === 'completed' ? 'status-ok' : 'status-err'}">${log.status}</span></td>
+                <td>${log.duration_ms || '-'}</td>
+                <td>${(log.prompt_tokens || 0) + (log.completion_tokens || 0)}</td>
+                <td>${(log.estimated_prompt_tokens || 0) + (log.estimated_completion_tokens || 0)}</td>
+            </tr>
+        `).join('');
+    } catch (e) { console.error('加载Agent日志失败:', e); }
+}
+
+function renderTokenTrendChart(trends) {
+    const ctx = document.getElementById('tokenTrendChart').getContext('2d');
+    if (charts.token) charts.token.destroy();
+    charts.token = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: trends.map(t => t.label),
+            datasets: [
+                {
+                    label: 'Prompt',
+                    data: trends.map(t => t.prompt_tokens),
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    tension: 0.3,
+                    fill: true,
+                },
+                {
+                    label: 'Completion',
+                    data: trends.map(t => t.completion_tokens),
+                    borderColor: 'rgba(16, 185, 129, 1)',
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    tension: 0.3,
+                    fill: true,
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'bottom' } },
+            scales: { y: { beginAtZero: true } },
+        },
+    });
+}
+
+function renderRequestTrendChart(trends) {
+    const ctx = document.getElementById('requestTrendChart').getContext('2d');
+    if (charts.request) charts.request.destroy();
+    charts.request = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: trends.map(t => t.label),
+            datasets: [
+                {
+                    label: '请求数',
+                    data: trends.map(t => t.total_requests),
+                    backgroundColor: 'rgba(180, 83, 9, 0.7)',
+                    yAxisID: 'y',
+                },
+                {
+                    label: '错误数',
+                    data: trends.map(t => t.error_requests || 0),
+                    backgroundColor: 'rgba(239, 68, 68, 0.7)',
+                    yAxisID: 'y',
+                },
+                {
+                    label: '平均延迟(ms)',
+                    data: trends.map(t => t.avg_duration_ms || 0),
+                    type: 'line',
+                    borderColor: 'rgba(139, 92, 246, 1)',
+                    backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                    yAxisID: 'y1',
+                    tension: 0.3,
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'bottom' } },
+            scales: {
+                y: { beginAtZero: true, position: 'left' },
+                y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false } },
+            },
+        },
+    });
+}
+
+function renderAgentPieChart(byType) {
+    const ctx = document.getElementById('agentPieChart').getContext('2d');
+    if (charts.agentPie) charts.agentPie.destroy();
+    const palette = [
+        'rgba(59, 130, 246, 0.8)', 'rgba(16, 185, 129, 0.8)', 'rgba(245, 158, 11, 0.8)',
+        'rgba(239, 68, 68, 0.8)', 'rgba(139, 92, 246, 0.8)', 'rgba(236, 72, 153, 0.8)', 'rgba(20, 184, 166, 0.8)',
+    ];
+    charts.agentPie = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: byType.map(t => t.agent_type),
+            datasets: [{
+                data: byType.map(t => t.call_count),
+                backgroundColor: byType.map((_, i) => palette[i % palette.length]),
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } },
+        },
+    });
+}
+
+function renderAgentStats(byType) {
+    const tbody = document.getElementById('agentStatsBody');
+    if (!byType.length) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-secondary);">暂无记录</td></tr>';
+        return;
+    }
+    tbody.innerHTML = byType.map(t => {
+        const successRate = t.call_count ? ((t.success_count || 0) / t.call_count * 100).toFixed(1) : 0;
+        return `
+            <tr>
+                <td>${t.agent_type}</td>
+                <td>${t.call_count}</td>
+                <td><span class="status-badge-mini status-ok">${successRate}%</span></td>
+                <td>${(t.prompt_tokens || 0) + (t.completion_tokens || 0)}</td>
+            </tr>
+        `;
+    }).join('');
+}
+</script>
+{% endblock %}

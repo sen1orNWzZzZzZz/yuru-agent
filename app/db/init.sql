@@ -23,6 +23,30 @@ CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username VARCHAR(50) NOT NULL UNIQUE,
     email VARCHAR(100),
+    password_hash VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
+-- 1.1 用户画像表
+-- ============================================================
+CREATE TABLE user_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    display_name VARCHAR(100),
+    age_group VARCHAR(20),                  -- 青少年/青年/中年/老年
+    companion_type VARCHAR(50),             -- 单人/情侣/家庭/朋友/商务
+    interests TEXT,                         -- JSON 数组
+    pace VARCHAR(20),                       -- slow/relaxed/balanced/intensive
+    budget_range INTEGER,                   -- 单次出行人均预算参考
+    dietary_restrictions TEXT,              -- JSON 数组
+    accessibility_needs TEXT,
+    preferred_transport VARCHAR(50),
+    home_city VARCHAR(100),
+    must_visit_tags TEXT,                   -- JSON 数组
+    avoid_tags TEXT,                        -- JSON 数组
+    llm_summary TEXT,                       -- LLM 自动总结的偏好描述
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -188,6 +212,8 @@ CREATE TABLE agent_logs (
     duration_ms INTEGER,
     prompt_tokens INTEGER DEFAULT 0,         -- LLM prompt tokens
     completion_tokens INTEGER DEFAULT 0,     -- LLM completion tokens
+    estimated_prompt_tokens INTEGER DEFAULT 0,     -- tiktoken 预估 prompt tokens
+    estimated_completion_tokens INTEGER DEFAULT 0, -- tiktoken 预估 completion tokens
     error_message TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -211,6 +237,41 @@ CREATE TABLE llm_cache (
 );
 
 -- ============================================================
+-- 10.1 外部 POI 缓存表（高德/百度等）
+-- ============================================================
+CREATE TABLE external_poi_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider VARCHAR(50) NOT NULL,
+    city VARCHAR(100) NOT NULL,
+    keywords VARCHAR(200) NOT NULL,
+    poi_type VARCHAR(50),
+    results_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_external_poi_cache_lookup ON external_poi_cache(provider, city, keywords, poi_type);
+
+-- ============================================================
+-- 11. API 请求日志表
+-- ============================================================
+CREATE TABLE request_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    method VARCHAR(10) NOT NULL,
+    path TEXT NOT NULL,
+    query_params TEXT,
+    status_code INTEGER,
+    duration_ms REAL,
+    client_ip TEXT,
+    user_agent TEXT,
+    error_message TEXT
+);
+
+CREATE INDEX idx_request_logs_created ON request_logs(created_at);
+CREATE INDEX idx_request_logs_path ON request_logs(path);
+
+-- ============================================================
 -- 索引优化
 -- ============================================================
 CREATE INDEX idx_poi_city ON poi_data(city);
@@ -220,6 +281,7 @@ CREATE INDEX idx_xhs_poi ON xiaohongshu_notes(poi_name);
 CREATE INDEX idx_xhs_city ON xiaohongshu_notes(city);
 CREATE INDEX idx_itinerary_user ON itineraries(user_id);
 CREATE INDEX idx_agent_logs_itinerary ON agent_logs(itinerary_id);
+CREATE INDEX idx_user_profiles_user ON user_profiles(user_id);
 CREATE INDEX idx_api_configs_type ON api_configs(config_type);
 CREATE INDEX idx_llm_cache_key ON llm_cache(cache_key);
 CREATE INDEX idx_llm_cache_expires ON llm_cache(expires_at);

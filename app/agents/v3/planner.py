@@ -5,6 +5,7 @@ PlannerAgent - 中央调度器
 import concurrent.futures
 import json
 import logging
+import math
 import time
 from typing import Any
 
@@ -13,7 +14,22 @@ from app.agents.v3.risk_agent import RiskAgent
 from app.agents.v3.weather_agent import WeatherAgent
 from app.integrations.llm_client import LLMClient
 
+from app.agents.v3.profile_agent import ProfileSummarizerAgent
+
 logger = logging.getLogger(__name__)
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """计算两点间直线距离（公里）"""
+    if not all((lat1, lon1, lat2, lon2)):
+        return float("inf")
+    R = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
 
 
 ITINERARY_SCHEMA = {
@@ -94,7 +110,9 @@ class PlannerAgent:
         self.risk_agent = RiskAgent(self.llm)
 
     def plan(self, destination: str, days: int = 3, travelers: int = 2,
-             budget: int = None, origin: str = "上海", style: str = "balanced") -> dict[str, Any]:
+             budget: int = None, origin: str = "上海", style: str = "balanced",
+             preferences: dict | None = None,
+             user_id: int | None = None) -> dict[str, Any]:
         """
         主规划流程
         1. 解析用户需求
@@ -112,6 +130,8 @@ class PlannerAgent:
             "origin": origin,
             "style": style,
         }
+        if preferences:
+            context.update(preferences)
 
         logger.info(f"[Planner] 开始规划: {destination} {days}天 {travelers}人")
 
@@ -131,7 +151,11 @@ class PlannerAgent:
         total_duration = int((time.time() - total_start) * 1000)
 
         # 保存到数据库
-        itinerary_id = self._save_itinerary(context, itinerary, results)
+        itinerary_id = self._save_itinerary(context, itinerary, results, user_id=user_id)
+
+        # 登录用户：自动总结并更新画像
+        if user_id:
+            ProfileSummarizerAgent().summarize(user_id, context, itinerary)
 
         return {
             "success": True,
@@ -201,6 +225,21 @@ class PlannerAgent:
         attractions = results["attraction_result"].data.get("attractions", [])
         transport = results["transport_result"].data
 
+        selected_hotel = hotels[0] if hotels else None
+        h_lat = selected_hotel.get("latitude") if selected_hotel else None
+        h_lon = selected_hotel.get("longitude") if selected_hotel else None
+
+        # 按距离酒店远近排序，优先安排酒店附近的 POI
+        def distance_to_hotel(poi: dict) -> float:
+            return _haversine_km(
+                h_lat, h_lon,
+                poi.get("latitude") or 0, poi.get("longitude") or 0
+            )
+
+        if h_lat and h_lon:
+            attractions = sorted(attractions, key=distance_to_hotel)
+            restaurants = sorted(restaurants, key=distance_to_hotel)
+
         # 分配景点到每天
         day_plans = []
         for i in range(days):
@@ -208,8 +247,8 @@ class PlannerAgent:
             day_restaurants = restaurants[i*2:(i+1)*2] if i*2 < len(restaurants) else []
 
             activities = []
-            if hotels and i == 0:
-                activities.append({"time": "入住", "name": hotels[0]["name"], "type": "hotel"})
+            if selected_hotel and i == 0:
+                activities.append({"time": "入住", "name": selected_hotel["name"], "type": "hotel"})
 
             for j, attr in enumerate(day_attractions):
                 activities.append({
@@ -239,7 +278,7 @@ class PlannerAgent:
         return {
             "title": f"{destination} {days}日深度游",
             "summary": f"{destination} {days}天行程，包含{len(attractions)}个景点、{len(restaurants)}家餐厅推荐",
-            "hotel": hotels[0]["name"] if hotels else "",
+            "hotel": selected_hotel["name"] if selected_hotel else "",
             "transport": transport.get("options", [{}])[0].get("name", ""),
             "days": day_plans,
             "tips": [r["message"] for r in risk_result.data.get("warnings", [])],
@@ -261,7 +300,16 @@ class PlannerAgent:
 天数: {context['days']}天
 人数: {context['travelers']}人
 预算: ¥{context.get('budget', '未设定')}
-风格: {context['style']}
+风格: {context.get('style', 'balanced')}
+节奏: {context.get('pace', context.get('style', 'balanced'))}
+
+【个性化偏好】
+兴趣: {context.get('interests', '无')}
+必去: {context.get('must_visit', '无')}
+避免: {context.get('avoid', '无')}
+特殊需求: {context.get('special_needs', '无')}
+季节: {context.get('season', '未设定')}
+画像摘要: {context.get('llm_summary', '无')}
 
 【天气】
 当前: {weather.data.get('current', {})}
@@ -285,7 +333,7 @@ class PlannerAgent:
 
 请输出符合 JSON Schema 的行程对象，不要包含 markdown 代码块。"""
 
-    def _save_itinerary(self, context: dict, itinerary: dict, results: dict) -> int:
+    def _save_itinerary(self, context: dict, itinerary: dict, results: dict, user_id: int | None = None) -> int:
         """保存行程到数据库"""
         try:
             from app.db.database import execute, get_db_connection
@@ -293,10 +341,11 @@ class PlannerAgent:
 
             # 保存行程
             it_id = execute(conn, """
-                INSERT INTO itineraries (title, destination, origin, start_date, end_date,
+                INSERT INTO itineraries (user_id, title, destination, origin, start_date, end_date,
                     traveler_count, budget, travel_style, status, llm_used)
-                VALUES (?, ?, ?, date('now'), date('now', ?), ?, ?, ?, 'planned', ?)
+                VALUES (?, ?, ?, ?, date('now'), date('now', ?), ?, ?, ?, 'planned', ?)
             """, (
+                user_id,
                 itinerary.get("title", f"{context['destination']}之旅"),
                 context["destination"],
                 context["origin"],
@@ -312,14 +361,17 @@ class PlannerAgent:
                 usage = result.usage or {}
                 execute(conn, """
                     INSERT INTO agent_logs (itinerary_id, agent_type, agent_name, status,
-                        output_result, duration_ms, prompt_tokens, completion_tokens, error_message)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        output_result, duration_ms, prompt_tokens, completion_tokens,
+                        estimated_prompt_tokens, estimated_completion_tokens, error_message)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     it_id, result.agent_type, result.agent_name, result.status,
                     json.dumps(result.data, ensure_ascii=False)[:2000],
                     result.duration_ms,
                     usage.get("prompt_tokens", 0),
                     usage.get("completion_tokens", 0),
+                    usage.get("estimated_prompt_tokens", 0),
+                    usage.get("estimated_completion_tokens", 0),
                     result.error or "",
                 ))
 

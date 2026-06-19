@@ -1,12 +1,40 @@
 """
 POI数据Agent - 从数据库查询酒店/餐厅/景点
-集成反水军评分
+集成反水军评分，支持高德/百度 POI 搜索 fallback
 """
 import json
 from typing import Any
 
 from app.agents.v3.base import BaseAgentV3
 from app.db.database import get_db_connection, query_all
+from app.integrations.map import MapClient
+
+
+def _external_to_poi_dict(external: dict, poi_type: str, city: str) -> dict:
+    """把地图 API 返回的 POI 统一转换为 poi_data 风格字典"""
+    return {
+        "poi_id": f"ext-{poi_type}-{external.get('name', '')}"[:50],
+        "name": external.get("name"),
+        "poi_type": poi_type,
+        "city": city,
+        "district": external.get("district"),
+        "address": external.get("address"),
+        "latitude": external.get("latitude"),
+        "longitude": external.get("longitude"),
+        "rating": external.get("rating", 4.0),
+        "review_count": 0,
+        "price_value": None,
+        "tags": "[]",
+        "description": "",
+        "extras": json.dumps({"source": "map_api", "photos": external.get("photos", [])}, ensure_ascii=False),
+        "open_hours": None,
+        "needs_booking": 0,
+        "altitude": None,
+        "visit_duration": None,
+        "xiaohongshu_mentions": 0,
+        "xiaohongshu_score": 70,
+        "source": "map_api",
+    }
 
 
 class HotelAgent(BaseAgentV3):
@@ -31,6 +59,14 @@ class HotelAgent(BaseAgentV3):
             if budget:
                 max_price = budget * (1.5 if travelers > 2 else 1.0)
                 hotels = [h for h in hotels if (h.get("price_value") or 9999) <= max_price]
+
+            # 本地数据不足时，fallback 高德/百度 POI 搜索
+            if len(hotels) < 3:
+                client = MapClient()
+                if client.is_available():
+                    external = client.search_poi(city, keywords="酒店", poi_type="hotel", page_size=10)
+                    for e in external[:10]:
+                        hotels.append(_external_to_poi_dict(e, "hotel", city))
 
             # 补充小红书口碑
             for h in hotels[:8]:
@@ -114,6 +150,14 @@ class RestaurantAgent(BaseAgentV3):
                 pl = r.get("price_level", "medium")
                 categories.setdefault(pl, []).append(r)
 
+            # 本地数据不足时，fallback 高德/百度 POI 搜索
+            if len(restaurants) < 5:
+                client = MapClient()
+                if client.is_available():
+                    external = client.search_poi(city, keywords="美食", poi_type="restaurant", page_size=10)
+                    for e in external[:10]:
+                        restaurants.append(_external_to_poi_dict(e, "restaurant", city))
+
             return {
                 "city": city,
                 "restaurants": restaurants[:8],
@@ -173,6 +217,14 @@ class AttractionAgent(BaseAgentV3):
                     altitude_risks.append({
                         "name": a["name"], "altitude": alt, "risk_level": level,
                     })
+
+            # 本地数据不足时，fallback 高德/百度 POI 搜索
+            if len(attractions) < 5:
+                client = MapClient()
+                if client.is_available():
+                    external = client.search_poi(city, keywords="景点", poi_type="attraction", page_size=10)
+                    for e in external[:10]:
+                        attractions.append(_external_to_poi_dict(e, "attraction", city))
 
             return {
                 "city": city,

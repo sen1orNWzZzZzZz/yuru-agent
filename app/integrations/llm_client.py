@@ -164,6 +164,102 @@ class PromptCache:
             conn.close()
 
 
+class TokenEstimator:
+    """
+    调用前 Token 估算器（基于 tiktoken）
+
+    - 对 OpenAI/兼容模型：使用 tiktoken 精确估算 prompt token
+    - 对 Claude/其他模型：tiktoken 只能近似，会标注 method=tiktoken-cl100k_base
+    - 若 tiktoken 不可用，回退到字符数近似
+    """
+
+    ENCODING_MAP: dict[str, str] = {
+        "gpt-4o": "o200k_base",
+        "gpt-4o-mini": "o200k_base",
+        "o1": "o200k_base",
+        "o3": "o200k_base",
+        "gpt-4-turbo": "cl100k_base",
+        "gpt-4": "cl100k_base",
+        "gpt-3.5-turbo": "cl100k_base",
+    }
+    FALLBACK_ENCODING = "cl100k_base"
+
+    @classmethod
+    def _encoding_name_for_model(cls, model: str | None) -> str:
+        if not model:
+            return cls.FALLBACK_ENCODING
+        model_lower = model.lower()
+        for prefix, enc in cls.ENCODING_MAP.items():
+            if prefix in model_lower:
+                return enc
+        return cls.FALLBACK_ENCODING
+
+    @classmethod
+    def estimate(
+        cls,
+        messages: list[dict],
+        max_completion_tokens: int | None = None,
+        model: str | None = None,
+    ) -> dict[str, int | str]:
+        """
+        估算 prompt / completion token 数。
+
+        prompt 估算按 OpenAI chat format 经验公式：
+        - 每条 message 固定开销约 4 tokens（role + 分隔符）
+        - 内容按 encoding 编码后 token 数
+        - 最后 +2 表示 assistant priming
+        """
+        try:
+            import tiktoken
+
+            enc_name = cls._encoding_name_for_model(model)
+            encoding = tiktoken.get_encoding(enc_name)
+        except Exception as e:
+            logger.warning(f"[TokenEstimator] tiktoken 不可用: {e}，使用字符数回退估算")
+            return cls._fallback_estimate(messages, max_completion_tokens, model)
+
+        prompt_tokens = 0
+        for msg in messages:
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                content = " ".join(str(part) for part in content)
+            prompt_tokens += 4  # role + delimiters
+            prompt_tokens += len(encoding.encode(content, disallowed_special=()))
+        prompt_tokens += 2  # assistant priming
+
+        completion_tokens = max_completion_tokens or 0
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "model": model or "",
+            "method": f"tiktoken-{enc_name}",
+        }
+
+    @classmethod
+    def _fallback_estimate(
+        cls,
+        messages: list[dict],
+        max_completion_tokens: int | None,
+        model: str | None,
+    ) -> dict[str, int | str]:
+        prompt_tokens = 0
+        for msg in messages:
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                content = " ".join(str(part) for part in content)
+            # 中文约占 1/3 个 tiktoken 等效 token，英文约占 1/4
+            prompt_tokens += max(1, len(content) // 3)
+        completion_tokens = max_completion_tokens or 0
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "model": model or "",
+            "method": "char-fallback",
+        }
+
+
 class LLMClient:
     """
     通用LLM客户端 - OpenAI Chat Completions格式
@@ -256,6 +352,17 @@ class LLMClient:
         if extra_payload:
             payload.update(extra_payload)
 
+        # 调用前估算 token 消耗
+        estimated_usage = TokenEstimator.estimate(
+            messages, payload["max_tokens"], payload["model"]
+        )
+
+        def _inject_estimate(usage: dict) -> dict:
+            usage.setdefault("estimated_prompt_tokens", estimated_usage["prompt_tokens"])
+            usage.setdefault("estimated_completion_tokens", estimated_usage["completion_tokens"])
+            usage.setdefault("estimate_method", estimated_usage["method"])
+            return usage
+
         # 1. 查询 Prompt 缓存
         cache_key = None
         if use_cache:
@@ -268,7 +375,7 @@ class LLMClient:
                 return {
                     "success": True,
                     "content": cached["content"],
-                    "usage": cached["usage"],
+                    "usage": _inject_estimate(cached["usage"].copy()),
                     "latency_ms": 0,
                     "model": payload["model"],
                     "cached": True,
@@ -277,7 +384,10 @@ class LLMClient:
         # 2. 调用 LLM API
         start_time = time.time()
         try:
-            logger.info(f"[LLM] 请求: model={payload['model']}, messages={len(messages)}")
+            logger.info(
+                f"[LLM] 请求: model={payload['model']}, messages={len(messages)}, "
+                f"预估 prompt={estimated_usage['prompt_tokens']} tokens"
+            )
             response = self._client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -285,7 +395,7 @@ class LLMClient:
 
             choice = data["choices"][0]
             content = choice["message"].get("content", "")
-            usage = data.get("usage", {})
+            usage = _inject_estimate(data.get("usage", {}).copy())
 
             logger.info(f"[LLM] 响应: latency={latency_ms}ms, "
                        f"tokens={usage.get('total_tokens', 0)}")
@@ -313,14 +423,17 @@ class LLMClient:
 
         except httpx.TimeoutException:
             logger.error("[LLM] 请求超时")
-            return {"success": False, "content": "", "error": "请求超时"}
+            return {"success": False, "content": "", "error": "请求超时",
+                    "usage": _inject_estimate({})}
         except httpx.HTTPStatusError as e:
             err_text = e.response.text[:200]
             logger.error(f"[LLM] HTTP错误 {e.response.status_code}: {err_text}")
-            return {"success": False, "content": "", "error": f"API错误({e.response.status_code}): {err_text}"}
+            return {"success": False, "content": "", "error": f"API错误({e.response.status_code}): {err_text}",
+                    "usage": _inject_estimate({})}
         except Exception as e:
             logger.error(f"[LLM] 异常: {e}")
-            return {"success": False, "content": "", "error": str(e)}
+            return {"success": False, "content": "", "error": str(e),
+                    "usage": _inject_estimate({})}
 
     def chat_with_retry(self, messages: list[dict[str, str]],
                         max_retries: int = 2,
@@ -422,8 +535,11 @@ class LLMClient:
         采用 OpenAI 标准的 Server-Sent Events 格式，逐行解析 data: {...} 并产出
         content delta。适用于需要实时打字机效果的场景。
 
+        部分 provider（如 OpenAI）会在流末尾发送 usage 信息，本方法会收集并在
+        流正常结束时产出 {"usage": {...}} 事件。
+
         Yields:
-            {"chunk": str} 或 {"error": str}
+            {"chunk": str} 或 {"usage": dict} 或 {"error": str}
         """
         if not self.is_available():
             yield {"error": "LLM未配置或未启用"}
@@ -440,8 +556,23 @@ class LLMClient:
             "stream": True,
         }
 
+        estimated_usage = TokenEstimator.estimate(
+            messages, payload["max_tokens"], payload["model"]
+        )
+
+        def _inject_stream_estimate(usage: dict | None) -> dict:
+            usage = usage.copy() if usage else {}
+            usage.setdefault("estimated_prompt_tokens", estimated_usage["prompt_tokens"])
+            usage.setdefault("estimated_completion_tokens", estimated_usage["completion_tokens"])
+            usage.setdefault("estimate_method", estimated_usage["method"])
+            return usage
+
         try:
-            logger.info(f"[LLM Stream] 请求: model={payload['model']}, messages={len(messages)}")
+            logger.info(
+                f"[LLM Stream] 请求: model={payload['model']}, messages={len(messages)}, "
+                f"预估 prompt={estimated_usage['prompt_tokens']} tokens"
+            )
+            usage = None
             with self._client.stream("POST", url, json=payload) as response:
                 response.raise_for_status()
                 for line in response.iter_lines():
@@ -456,6 +587,11 @@ class LLMClient:
                         break
                     try:
                         chunk = json.loads(data)
+
+                        # 收集 usage（通常出现在最后一个空 choices 的 chunk）
+                        if chunk.get("usage"):
+                            usage = chunk["usage"]
+
                         choices = chunk.get("choices", [])
                         if not choices:
                             continue
@@ -465,6 +601,9 @@ class LLMClient:
                             yield {"chunk": content}
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
+
+            if usage:
+                yield {"usage": _inject_stream_estimate(usage)}
         except httpx.TimeoutException:
             logger.error("[LLM Stream] 请求超时")
             yield {"error": "请求超时"}

@@ -3,14 +3,31 @@
 支持多provider：高德地图(AMap) / 百度地图
 提供POI搜索、地理编码、距离计算等功能
 """
+import json
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
 
+from app.db.database import execute, get_db_connection, query_one
 from app.integrations.config_manager import IntegrationConfig
 
 logger = logging.getLogger(__name__)
+
+
+# POI 类型映射（简化版）
+AMAP_TYPE_MAP = {
+    "hotel": "100000",      # 住宿服务
+    "restaurant": "050000", # 餐饮服务
+    "attraction": "110000", # 风景名胜
+}
+
+BAIDU_TYPE_MAP = {
+    "hotel": "酒店",
+    "restaurant": "美食",
+    "attraction": "旅游景点",
+}
 
 
 class MapClient:
@@ -26,6 +43,54 @@ class MapClient:
         self.base_url = self.config["base_url"] if self.config else None
         self.extra_params = self.config.get("extra_params", {}) if self.config else {}
         self.client = httpx.Client(timeout=15)
+
+    def _get_cached_poi(self, city: str, keywords: str, poi_type: str) -> list[dict] | None:
+        """读取 POI 搜索结果缓存（7天有效）"""
+        if not self.provider:
+            return None
+        try:
+            conn = get_db_connection()
+            try:
+                row = query_one(
+                    conn,
+                    """
+                    SELECT results_json, created_at FROM external_poi_cache
+                    WHERE provider = ? AND city = ? AND keywords = ? AND poi_type = ?
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (self.provider, city, keywords, poi_type),
+                )
+                if row:
+                    created = row.get("created_at", "")
+                    expiry = (datetime.now() - timedelta(days=7)).isoformat()
+                    if created and created > expiry:
+                        return json.loads(row["results_json"])
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"[Map] 读取 POI 缓存失败: {e}")
+        return None
+
+    def _set_cached_poi(self, city: str, keywords: str, poi_type: str, results: list[dict]) -> None:
+        """写入 POI 搜索结果缓存"""
+        if not self.provider:
+            return
+        try:
+            conn = get_db_connection()
+            try:
+                execute(
+                    conn,
+                    """
+                    INSERT OR REPLACE INTO external_poi_cache
+                    (provider, city, keywords, poi_type, results_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (self.provider, city, keywords, poi_type, json.dumps(results, ensure_ascii=False)),
+                )
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"[Map] 写入 POI 缓存失败: {e}")
 
     def is_available(self) -> bool:
         return self.config is not None and self.api_key is not None
@@ -44,13 +109,20 @@ class MapClient:
         if not self.is_available():
             return []
 
+        cached = self._get_cached_poi(city, keywords, poi_type)
+        if cached is not None:
+            logger.info(f"[Map] POI 缓存命中: {city}/{keywords}/{poi_type}")
+            return cached
+
         try:
             if self.provider == "amap":
-                return self._amap_search(city, keywords, poi_type, page_size)
+                results = self._amap_search(city, keywords, poi_type, page_size)
             elif self.provider == "baidu":
-                return self._baidu_search(city, keywords, poi_type, page_size)
+                results = self._baidu_search(city, keywords, poi_type, page_size)
             else:
                 return []
+            self._set_cached_poi(city, keywords, poi_type, results)
+            return results
         except Exception as e:
             logger.error(f"[Map] POI搜索失败: {e}")
             return []
@@ -110,12 +182,15 @@ class MapClient:
             "key": self.api_key,
             "keywords": keywords,
             "city": city,
+            "citylimit": "true",
             "offset": page_size,
             "page": 1,
+            "extensions": "all",
             "output": "JSON",
         }
-        if poi_type:
-            params["types"] = poi_type
+        type_code = AMAP_TYPE_MAP.get(poi_type, poi_type)
+        if type_code:
+            params["types"] = type_code
 
         resp = self.client.get(url, params=params)
         resp.raise_for_status()
@@ -127,15 +202,21 @@ class MapClient:
 
         results = []
         for poi in data.get("pois", []):
+            loc = poi.get("location", "")
+            lng_lat = loc.split(",") if loc else [None, None]
             results.append({
                 "name": poi.get("name"),
                 "address": poi.get("address"),
-                "location": poi.get("location"),
+                "location": loc,
+                "longitude": float(lng_lat[0]) if lng_lat[0] else None,
+                "latitude": float(lng_lat[1]) if lng_lat[1] else None,
                 "type": poi.get("type"),
+                "typecode": poi.get("typecode"),
                 "tel": poi.get("tel"),
                 "city": poi.get("cityname"),
                 "district": poi.get("adname"),
-                "biz_ext": poi.get("biz_ext", {}),
+                "rating": float(poi.get("biz_ext", {}).get("rating", 0) or 0) or 4.0,
+                "photos": poi.get("photos", []),
             })
         return results
 

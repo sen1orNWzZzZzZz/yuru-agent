@@ -3,10 +3,6 @@
 import logging
 from pathlib import Path
 
-import chromadb
-
-from app.knowledge.embedder import LocalEmbedder
-
 logger = logging.getLogger(__name__)
 
 # 向量库持久化目录
@@ -21,6 +17,11 @@ class KnowledgeVectorStore:
         collection_name: str = "travel_tips",
         persist_dir: str | None = None,
     ):
+        # 延迟导入，避免在项目启动/测试时强制依赖 ChromaDB
+        import chromadb
+
+        from app.knowledge.embedder import LocalEmbedder
+
         self.persist_dir = str(persist_dir or DEFAULT_PERSIST_DIR)
         self.client = chromadb.PersistentClient(path=self.persist_dir)
         self.collection = self.client.get_or_create_collection(

@@ -1,0 +1,132 @@
+{% extends "base_v3.html" %}
+
+{% block title %}登录 / 注册 - 灵动旅心 V3{% endblock %}
+
+{% block extra_css %}
+<style>
+.auth-container {
+    max-width: 460px;
+    margin: 0 auto;
+    padding: 40px 0;
+}
+.auth-tabs {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 24px;
+}
+.auth-tab {
+    flex: 1;
+    padding: 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-weight: 500;
+    transition: var(--transition);
+}
+.auth-tab.active {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+}
+.auth-panel {
+    display: none;
+}
+.auth-panel.active {
+    display: block;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="auth-container animate-fade-up">
+    <div class="text-center" style="margin-bottom:32px;">
+        <div class="heading-md">开启你的专属旅程</div>
+        <p class="text-secondary">登录后可保存个人偏好，每次规划都会更懂你</p>
+    </div>
+
+    <div class="auth-tabs">
+        <button class="auth-tab active" onclick="switchTab('login')" id="tabLogin">登录</button>
+        <button class="auth-tab" onclick="switchTab('register')" id="tabRegister">注册</button>
+    </div>
+
+    <div class="card">
+        <!-- 登录 -->
+        <div id="panelLogin" class="auth-panel active">
+            <form onsubmit="return handleLogin(event)">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="loginUsername" required>
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="loginPassword" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%;">登录</button>
+            </form>
+        </div>
+
+        <!-- 注册 -->
+        <div id="panelRegister" class="auth-panel">
+            <form onsubmit="return handleRegister(event)">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="registerUsername" required minlength="2">
+                </div>
+                <div class="form-group">
+                    <label>邮箱（可选）</label>
+                    <input type="email" id="registerEmail">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="registerPassword" required minlength="4">
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%;">注册</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function switchTab(tab) {
+    document.getElementById('panelLogin').classList.toggle('active', tab === 'login');
+    document.getElementById('panelRegister').classList.toggle('active', tab === 'register');
+    document.getElementById('tabLogin').classList.toggle('active', tab === 'login');
+    document.getElementById('tabRegister').classList.toggle('active', tab === 'register');
+}
+
+async function handleLogin(e) {
+    e.preventDefault();
+    const body = {
+        username: document.getElementById('loginUsername').value,
+        password: document.getElementById('loginPassword').value,
+    };
+    const r = await apiPost('/api/auth/login', body);
+    if (r.success) {
+        showToast('登录成功', 'success');
+        setTimeout(() => location.href = '/plan', 600);
+    } else {
+        showToast(r.message, 'error');
+    }
+    return false;
+}
+
+async function handleRegister(e) {
+    e.preventDefault();
+    const body = {
+        username: document.getElementById('registerUsername').value,
+        email: document.getElementById('registerEmail').value || null,
+        password: document.getElementById('registerPassword').value,
+    };
+    const r = await apiPost('/api/auth/register', body);
+    if (r.success) {
+        showToast('注册成功，请登录', 'success');
+        switchTab('login');
+    } else {
+        showToast(r.message, 'error');
+    }
+    return false;
+}
+</script>
+{% endblock %}

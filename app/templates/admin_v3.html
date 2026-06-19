@@ -6,6 +6,9 @@
 <div class="admin-header animate-fade-up">
     <div class="heading-lg">系统管理</div>
     <p>配置 LLM、天气、地图 API，查看系统运行状态与数据规模</p>
+    <div style="margin-top:12px;">
+        <a href="/admin/dashboard" class="btn btn-accent btn-sm">📊 进入系统观测大盘</a>
+    </div>
 </div>
 
 <!-- 系统状态 -->
@@ -251,6 +254,77 @@
     </form>
 </div>
 
+<!-- 可观测性指标 -->
+<div class="card config-card animate-fade-up animate-delay-3">
+    <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="20" x2="18" y2="10"/>
+            <line x1="12" y1="20" x2="12" y2="4"/>
+            <line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+        系统可观测性
+    </div>
+
+    <!-- 指标卡片 -->
+    <div class="grid-4" style="margin-bottom:24px;">
+        <div class="text-center">
+            <div id="metricTotalRequests" style="font-size:2rem;font-weight:600;color:var(--accent);font-family:var(--font-display);">-</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">总请求数</div>
+        </div>
+        <div class="text-center">
+            <div id="metricAvgDuration" style="font-size:2rem;font-weight:600;color:var(--accent);font-family:var(--font-display);">-</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">平均延迟(ms)</div>
+        </div>
+        <div class="text-center">
+            <div id="metricCacheHitRate" style="font-size:2rem;font-weight:600;color:var(--accent);font-family:var(--font-display);">-</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">缓存命中率</div>
+        </div>
+        <div class="text-center">
+            <div id="metricAgentSuccess" style="font-size:2rem;font-weight:600;color:var(--accent);font-family:var(--font-display);">-</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">Agent 成功率</div>
+        </div>
+        <div class="text-center">
+            <div id="metricTotalTokens" style="font-size:2rem;font-weight:600;color:var(--accent);font-family:var(--font-display);">-</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">总 Token</div>
+        </div>
+        <div class="text-center">
+            <div id="metricLlmCalls" style="font-size:2rem;font-weight:600;color:var(--accent);font-family:var(--font-display);">-</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">LLM 调用次数</div>
+        </div>
+    </div>
+
+    <!-- 图表 -->
+    <div class="form-row" style="margin-bottom:24px;">
+        <div class="form-group" style="min-width:300px;flex:2;">
+            <div style="font-weight:500;margin-bottom:12px;color:var(--text-primary);">Token 消耗趋势（近30天）</div>
+            <canvas id="tokenTrendChart" height="120"></canvas>
+        </div>
+        <div class="form-group" style="min-width:250px;flex:1;">
+            <div style="font-weight:500;margin-bottom:12px;color:var(--text-primary);">Agent 调用占比</div>
+            <canvas id="agentPieChart" height="120"></canvas>
+        </div>
+    </div>
+
+    <!-- 请求日志表格 -->
+    <div style="font-weight:500;margin-bottom:12px;color:var(--text-primary);">最近请求记录</div>
+    <div style="overflow-x:auto;">
+        <table class="data-table" style="width:100%;font-size:0.85rem;">
+            <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>Method</th>
+                    <th>Path</th>
+                    <th>Status</th>
+                    <th>耗时(ms)</th>
+                </tr>
+            </thead>
+            <tbody id="requestLogsBody">
+                <tr><td colspan="5" style="text-align:center;color:var(--text-secondary);">加载中...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
 <!-- 数据概览 -->
 <div class="card config-card animate-fade-up animate-delay-3">
     <div class="card-title">
@@ -284,8 +358,16 @@
 <!-- 测试结果 -->
 <div id="testResult" class="card" style="display:none;"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
-document.addEventListener('DOMContentLoaded', loadStatus);
+document.addEventListener('DOMContentLoaded', () => {
+    loadStatus();
+    loadMetrics();
+    loadRequestLogs();
+});
+
+let tokenTrendChart = null;
+let agentPieChart = null;
 
 async function loadStatus() {
     try {
@@ -301,6 +383,105 @@ async function loadStatus() {
             document.getElementById('dbXhs').textContent = d.database.xiaohongshu;
         }
     } catch (e) { console.error('加载状态失败:', e); }
+}
+
+async function loadMetrics() {
+    try {
+        const r = await apiGet('/api/admin/metrics');
+        if (!r.success) return;
+        const d = r.data;
+
+        document.getElementById('metricTotalRequests').textContent = d.requests.total_requests || 0;
+        document.getElementById('metricAvgDuration').textContent = d.requests.avg_duration_ms || 0;
+        document.getElementById('metricCacheHitRate').textContent = ((d.cache.hit_rate || 0) * 100).toFixed(1) + '%';
+        document.getElementById('metricAgentSuccess').textContent = ((d.agents.success_rate || 0) * 100).toFixed(1) + '%';
+        document.getElementById('metricTotalTokens').textContent = (d.llm.total_tokens || 0).toLocaleString();
+        document.getElementById('metricLlmCalls').textContent = d.llm.call_count || 0;
+
+        renderTokenTrendChart(d.trends || []);
+        renderAgentPieChart(d.agents.by_type || []);
+    } catch (e) { console.error('加载指标失败:', e); }
+}
+
+async function loadRequestLogs() {
+    try {
+        const r = await apiGet('/api/admin/request-logs?limit=20');
+        const tbody = document.getElementById('requestLogsBody');
+        if (!r.success || !r.data.length) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);">暂无请求记录</td></tr>';
+            return;
+        }
+        tbody.innerHTML = r.data.map(log => `
+            <tr>
+                <td>${new Date(log.created_at).toLocaleString()}</td>
+                <td>${log.method}</td>
+                <td>${log.path}</td>
+                <td><span class="status-badge ${log.status_code >= 400 ? 'status-err' : 'status-ok'}" style="font-size:0.75rem;padding:2px 8px;">${log.status_code}</span></td>
+                <td>${Math.round(log.duration_ms)}</td>
+            </tr>
+        `).join('');
+    } catch (e) { console.error('加载请求日志失败:', e); }
+}
+
+function renderTokenTrendChart(trends) {
+    const ctx = document.getElementById('tokenTrendChart').getContext('2d');
+    if (tokenTrendChart) tokenTrendChart.destroy();
+    tokenTrendChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: trends.map(t => t.day),
+            datasets: [
+                {
+                    label: 'Prompt Tokens',
+                    data: trends.map(t => t.prompt_tokens),
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    tension: 0.3,
+                    fill: true,
+                },
+                {
+                    label: 'Completion Tokens',
+                    data: trends.map(t => t.completion_tokens),
+                    borderColor: 'rgba(16, 185, 129, 1)',
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    tension: 0.3,
+                    fill: true,
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'bottom' } },
+            scales: { y: { beginAtZero: true } },
+        },
+    });
+}
+
+function renderAgentPieChart(byType) {
+    const ctx = document.getElementById('agentPieChart').getContext('2d');
+    if (agentPieChart) agentPieChart.destroy();
+    agentPieChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: byType.map(t => t.agent_type),
+            datasets: [{
+                data: byType.map(t => t.call_count),
+                backgroundColor: [
+                    'rgba(59, 130, 246, 0.8)',
+                    'rgba(16, 185, 129, 0.8)',
+                    'rgba(245, 158, 11, 0.8)',
+                    'rgba(239, 68, 68, 0.8)',
+                    'rgba(139, 92, 246, 0.8)',
+                    'rgba(236, 72, 153, 0.8)',
+                    'rgba(20, 184, 166, 0.8)',
+                ],
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } },
+        },
+    });
 }
 
 function updateStatus(id, ok, detail) {

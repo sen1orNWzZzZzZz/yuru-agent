@@ -6,6 +6,7 @@ PlannerAgent + 子Agent架构
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -15,12 +16,28 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.routing import Mount
 
 from app.agents.v3.planner import PlannerAgent
+from app.auth import (
+    get_current_user,
+    get_password_hash,
+    get_user_by_id,
+    get_user_by_username,
+    get_user_profile,
+    merge_profile_with_request,
+    profile_to_public,
+    require_user,
+    serialize_json_field,
+    verify_password,
+)
 from app.db.database import execute, get_db_connection, init_db, query_all, query_one
 from app.integrations.config_manager import IntegrationConfig
 from app.knowledge import ensure_ingested
+from app.mcp_server import MCPMessagesRoute, handle_mcp_sse
 
 # ============================================================
 # 初始化
@@ -31,10 +48,121 @@ app = FastAPI(
     version="3.0.0",
 )
 
+# Session 中间件（用于登录态）
+SECRET_KEY = os.environ.get("SESSION_SECRET_KEY", "lingdong-lvxing-v3-default-secret")
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, max_age=86400 * 7)
+
+# MCP Server 挂载到独立 Starlette 子应用，避免经过 FastAPI 的 HTTP 中间件
+mcp_app = Starlette(routes=[
+    Mount("/sse", app=handle_mcp_sse),
+    Mount("/messages/", app=MCPMessagesRoute()),
+])
+app.mount("/mcp", mcp_app)
+
 # 静态文件和模板
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+
+# ============================================================
+# 请求日志中间件
+# ============================================================
+EXCLUDED_LOG_PATHS = {"/static", "/favicon.ico"}
+
+
+def _should_log_path(path: str) -> bool:
+    """判断是否需要记录请求日志"""
+    for excluded in EXCLUDED_LOG_PATHS:
+        if path.startswith(excluded):
+            return False
+    return True
+
+
+def save_request_log(
+    method: str,
+    path: str,
+    query_params: str,
+    status_code: int | None,
+    duration_ms: float,
+    client_ip: str | None,
+    user_agent: str | None,
+    error_message: str | None,
+) -> None:
+    """将请求日志写入 SQLite"""
+    try:
+        conn = get_db_connection()
+        try:
+            execute(
+                conn,
+                """
+                INSERT INTO request_logs
+                (method, path, query_params, status_code, duration_ms, client_ip, user_agent, error_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    method,
+                    path,
+                    query_params,
+                    status_code,
+                    duration_ms,
+                    client_ip,
+                    user_agent,
+                    error_message,
+                ),
+            )
+        finally:
+            conn.close()
+    except Exception as e:
+        # 日志写入失败不能影响主请求
+        print(f"[RequestLog] 写入失败: {e}")
+
+
+class RequestLoggingMiddleware:
+    """纯 ASGI 请求日志中间件，不破坏 SSE 等流式响应."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        start_time = time.time()
+        status_code = None
+        error_message = None
+
+        async def wrapped_send(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message.get("status")
+            await send(message)
+
+        try:
+            await self.app(scope, receive, wrapped_send)
+        except Exception as e:
+            status_code = 500
+            error_message = str(e)
+            raise
+        finally:
+            path = scope.get("path", "")
+            if _should_log_path(path):
+                duration_ms = (time.time() - start_time) * 1000
+                save_request_log(
+                    method=scope.get("method", ""),
+                    path=path,
+                    query_params=str(scope.get("query_string", b""), encoding="utf-8"),
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    client_ip=scope.get("client", (None, None))[0] if scope.get("client") else None,
+                    user_agent=dict(scope.get("headers", [])).get(b"user-agent", b"").decode("utf-8", errors="ignore"),
+                    error_message=error_message,
+                )
+
+
+app.add_middleware(RequestLoggingMiddleware)
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -94,6 +222,35 @@ class APIConfigRequest(BaseModel):
     extra_params: str = "{}"
 
 
+class RegisterRequest(BaseModel):
+    """用户注册请求"""
+    username: str = Field(..., min_length=2, max_length=50)
+    password: str = Field(..., min_length=4)
+    email: str | None = None
+
+
+class LoginRequest(BaseModel):
+    """用户登录请求"""
+    username: str
+    password: str
+
+
+class UserProfileRequest(BaseModel):
+    """用户画像更新请求"""
+    display_name: str | None = None
+    age_group: str | None = None
+    companion_type: str | None = None
+    interests: list[str] | None = None
+    pace: str | None = None
+    budget_range: int | None = None
+    dietary_restrictions: list[str] | None = None
+    accessibility_needs: str | None = None
+    preferred_transport: str | None = None
+    home_city: str | None = None
+    must_visit_tags: list[str] | None = None
+    avoid_tags: list[str] | None = None
+
+
 # ============================================================
 # 页面路由
 # ============================================================
@@ -123,16 +280,37 @@ async def admin_page(request: Request):
     return templates.TemplateResponse(request, "admin_v3.html")
 
 
+@app.get("/admin/dashboard")
+async def dashboard_page(request: Request):
+    """系统观测大盘"""
+    return templates.TemplateResponse(request, "dashboard.html")
+
+
+@app.get("/login")
+async def login_page(request: Request):
+    """登录/注册页"""
+    return templates.TemplateResponse(request, "login.html")
+
+
 # ============================================================
 # API路由 - 核心规划
 # ============================================================
 @app.post("/api/v3/plan")
-async def create_plan(req: PlanRequest):
+async def create_plan(req: PlanRequest, request: Request):
     """
     创建旅行规划 (V3核心API)
     PlannerAgent调度所有子Agent并行执行
+    已登录用户会自动合并画像偏好，并在规划完成后更新画像。
     """
     try:
+        user = get_current_user(request)
+        preferences = None
+        user_id = None
+        if user:
+            profile = get_user_profile(user["id"])
+            preferences = merge_profile_with_request(profile, req.model_dump())
+            user_id = user["id"]
+
         planner = PlannerAgent()
         result = planner.plan(
             destination=req.destination,
@@ -141,6 +319,8 @@ async def create_plan(req: PlanRequest):
             budget=req.budget,
             origin=req.origin,
             style=req.style,
+            preferences=preferences,
+            user_id=user_id,
         )
         return {"success": True, "data": result}
     except Exception as e:
@@ -148,13 +328,18 @@ async def create_plan(req: PlanRequest):
 
 
 @app.post("/api/v3/plan/stream")
-async def create_plan_stream(req: PlanRequest):
+async def create_plan_stream(req: PlanRequest, request: Request):
     """
     流式创建旅行规划 (SSE)
 
     串行执行 Agent 并实时推送进度事件，前端可通过 ReadableStream 消费。
     与 POST /api/v3/plan 并行版互为补充：并行版性能更高，流式版体验更好。
     """
+    user = get_current_user(request)
+    profile = get_user_profile(user["id"]) if user else None
+    preferences = merge_profile_with_request(profile, req.model_dump()) if user else None
+    user_id = user["id"] if user else None
+
     async def event_generator():
         import time
 
@@ -168,6 +353,8 @@ async def create_plan_stream(req: PlanRequest):
             "origin": req.origin,
             "style": req.style,
         }
+        if preferences:
+            context.update(preferences)
         results = {}
 
         def sse_payload(event: dict) -> str:
@@ -217,8 +404,15 @@ async def create_plan_stream(req: PlanRequest):
 
         total_duration_ms = int((time.time() - start_time) * 1000)
         itinerary_id = await run_in_threadpool(
-            planner._save_itinerary, context, itinerary, results
+            planner._save_itinerary, context, itinerary, results, user_id
         )
+
+        # 登录用户：异步更新画像
+        if user_id:
+            from app.agents.v3.profile_agent import ProfileSummarizerAgent
+            await run_in_threadpool(
+                ProfileSummarizerAgent().summarize, user_id, context, itinerary
+            )
 
         final_data = {
             "success": True,
@@ -269,6 +463,121 @@ async def list_plans(limit: int = 20):
         plans = query_all(conn,
             "SELECT * FROM itineraries ORDER BY created_at DESC LIMIT ?", (limit,))
         return {"success": True, "data": plans, "total": len(plans)}
+    finally:
+        conn.close()
+
+
+# ============================================================
+# API路由 - 认证与用户画像
+# ============================================================
+@app.post("/api/auth/register")
+async def register(req: RegisterRequest):
+    """用户注册"""
+    if get_user_by_username(req.username):
+        return {"success": False, "message": "用户名已存在"}
+    conn = get_db_connection()
+    try:
+        user_id = execute(conn, """
+            INSERT INTO users (username, email, password_hash)
+            VALUES (?, ?, ?)
+        """, (req.username, req.email or "", get_password_hash(req.password)))
+        execute(conn, """
+            INSERT INTO user_profiles (user_id) VALUES (?)
+        """, (user_id,))
+        return {"success": True, "data": {"user_id": user_id}, "message": "注册成功"}
+    except Exception as e:
+        return {"success": False, "message": f"注册失败: {str(e)}"}
+    finally:
+        conn.close()
+
+
+@app.post("/api/auth/login")
+async def login(req: LoginRequest, request: Request):
+    """用户登录，写入 Session"""
+    user = get_user_by_username(req.username)
+    if not user or not verify_password(req.password, user.get("password_hash")):
+        return {"success": False, "message": "用户名或密码错误"}
+    request.session["user_id"] = user["id"]
+    return {"success": True, "data": {"user_id": user["id"], "username": user["username"]}}
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request):
+    """退出登录"""
+    request.session.pop("user_id", None)
+    return {"success": True, "message": "已退出登录"}
+
+
+@app.get("/api/auth/me")
+async def me(request: Request):
+    """获取当前登录用户信息及画像"""
+    user = get_current_user(request)
+    if not user:
+        return {"success": False, "message": "未登录"}
+    profile = get_user_profile(user["id"])
+    return {
+        "success": True,
+        "data": {
+            "user_id": user["id"],
+            "username": user["username"],
+            "email": user.get("email"),
+            "profile": profile_to_public(profile),
+        },
+    }
+
+
+@app.get("/api/users/me/profile")
+async def get_my_profile(request: Request):
+    """获取我的画像"""
+    user = get_current_user(request)
+    if not user:
+        return {"success": False, "message": "未登录"}
+    profile = get_user_profile(user["id"])
+    return {"success": True, "data": profile_to_public(profile)}
+
+
+@app.put("/api/users/me/profile")
+async def update_my_profile(req: UserProfileRequest, request: Request):
+    """更新我的画像（手动填写）"""
+    user = get_current_user(request)
+    if not user:
+        return {"success": False, "message": "未登录"}
+    conn = get_db_connection()
+    try:
+        execute(conn, """
+            UPDATE user_profiles SET
+                display_name = ?,
+                age_group = ?,
+                companion_type = ?,
+                interests = ?,
+                pace = ?,
+                budget_range = ?,
+                dietary_restrictions = ?,
+                accessibility_needs = ?,
+                preferred_transport = ?,
+                home_city = ?,
+                must_visit_tags = ?,
+                avoid_tags = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        """, (
+            req.display_name,
+            req.age_group,
+            req.companion_type,
+            serialize_json_field(req.interests),
+            req.pace,
+            req.budget_range,
+            serialize_json_field(req.dietary_restrictions),
+            req.accessibility_needs,
+            req.preferred_transport,
+            req.home_city,
+            serialize_json_field(req.must_visit_tags),
+            serialize_json_field(req.avoid_tags),
+            user["id"],
+        ))
+        return {"success": True, "message": "画像已更新"}
+    except Exception as e:
+        return {"success": False, "message": f"更新失败: {str(e)}"}
     finally:
         conn.close()
 
@@ -372,7 +681,8 @@ async def get_metrics():
 
     - 缓存命中率、命中次数、平均延迟
     - Agent 执行成功率
-    - LLM Token 消耗统计
+    - LLM Token 消耗统计（总量、按 Agent 类型、按天趋势）
+    - API 请求统计
     """
     from app.integrations.llm_client import PromptCache
 
@@ -397,6 +707,54 @@ async def get_metrics():
             "COALESCE(SUM(completion_tokens), 0) AS c FROM agent_logs",
         )
 
+        llm_call_count = query_one(
+            conn,
+            "SELECT COUNT(*) AS c FROM agent_logs WHERE prompt_tokens > 0 OR completion_tokens > 0",
+        )["c"]
+
+        # 按 Agent 类型统计 token 消耗和调用次数
+        by_type = query_all(
+            conn,
+            """
+            SELECT
+                agent_type,
+                COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                COUNT(*) AS call_count
+            FROM agent_logs
+            GROUP BY agent_type
+            ORDER BY call_count DESC
+            """,
+        )
+
+        # 近 30 天 token 消耗趋势
+        trends = query_all(
+            conn,
+            """
+            SELECT
+                DATE(created_at) AS day,
+                COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                COUNT(*) AS call_count
+            FROM agent_logs
+            WHERE created_at >= DATE('now', '-30 days')
+            GROUP BY DATE(created_at)
+            ORDER BY day ASC
+            """,
+        )
+
+        # API 请求统计
+        request_stats = query_one(
+            conn,
+            """
+            SELECT
+                COUNT(*) AS total_requests,
+                COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
+                SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS error_requests
+            FROM request_logs
+            """,
+        )
+
         return {
             "success": True,
             "data": {
@@ -410,14 +768,312 @@ async def get_metrics():
                 "llm": {
                     "total_prompt_tokens": token_row["p"],
                     "total_completion_tokens": token_row["c"],
+                    "total_tokens": token_row["p"] + token_row["c"],
+                    "call_count": llm_call_count,
+                },
+                "agents": {
+                    "total_logs": total_logs,
+                    "completed_logs": completed_logs,
+                    "success_rate": round(success_rate, 4),
+                    "by_type": by_type,
+                },
+                "trends": trends,
+                "requests": {
+                    "total_requests": request_stats["total_requests"],
+                    "avg_duration_ms": round(request_stats["avg_duration_ms"] or 0, 2),
+                    "error_requests": request_stats["error_requests"],
+                },
+            },
+        }
+    finally:
+        conn.close()
+
+
+# ============================================================
+# API路由 - Dashboard 可观测性（分级展示）
+# ============================================================
+
+def _dashboard_range_clause(range_str: str) -> tuple[str, tuple]:
+    """把前端 range 参数转成 SQLite 时间窗口片段和参数"""
+    if range_str not in {"24h", "7d", "30d"}:
+        range_str = "24h"
+    window = {"24h": "-1 day", "7d": "-7 days", "30d": "-30 days"}[range_str]
+    return "created_at >= DATETIME('now', ?)", (window,)
+
+
+@app.get("/api/admin/dashboard/summary")
+async def dashboard_summary(range: str = "24h"):
+    """L1 全局概览指标"""
+    range_sql, range_param = _dashboard_range_clause(range)
+    from app.integrations.llm_client import PromptCache
+
+    cache_stats = PromptCache().stats()
+    total_entries = cache_stats["total_entries"]
+    total_hits = cache_stats["total_hits"]
+    total_cache_requests = total_hits + total_entries
+    hit_rate = total_hits / total_cache_requests if total_cache_requests > 0 else 0.0
+    avg_latency = cache_stats["avg_latency_ms"] or 0
+
+    conn = get_db_connection()
+    try:
+        request_stats = query_one(
+            conn,
+            f"""
+            SELECT
+                COUNT(*) AS total_requests,
+                COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
+                SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS error_requests
+            FROM request_logs
+            WHERE {range_sql}
+            """,
+            range_param,
+        )
+
+        durations = query_all(
+            conn,
+            f"SELECT duration_ms FROM request_logs WHERE {range_sql} ORDER BY duration_ms ASC",
+            range_param,
+        )
+        p95_duration_ms = 0
+        if durations:
+            p95_idx = int(len(durations) * 0.95)
+            if p95_idx >= len(durations):
+                p95_idx = len(durations) - 1
+            p95_duration_ms = durations[p95_idx]["duration_ms"]
+
+        total_logs = query_one(
+            conn, f"SELECT COUNT(*) AS c FROM agent_logs WHERE {range_sql}", range_param
+        )["c"]
+        completed_logs = query_one(
+            conn,
+            f"SELECT COUNT(*) AS c FROM agent_logs WHERE status = 'completed' AND {range_sql}",
+            range_param,
+        )["c"]
+        success_rate = completed_logs / total_logs if total_logs > 0 else 0.0
+
+        token_row = query_one(
+            conn,
+            f"""
+            SELECT
+                COALESCE(SUM(prompt_tokens), 0) AS p,
+                COALESCE(SUM(completion_tokens), 0) AS c
+            FROM agent_logs
+            WHERE {range_sql}
+            """,
+            range_param,
+        )
+
+        estimated_row = query_one(
+            conn,
+            f"""
+            SELECT
+                COALESCE(SUM(estimated_prompt_tokens), 0) AS p,
+                COALESCE(SUM(estimated_completion_tokens), 0) AS c
+            FROM agent_logs
+            WHERE {range_sql}
+            """,
+            range_param,
+        )
+
+        llm_call_count = query_one(
+            conn,
+            f"""
+            SELECT COUNT(*) AS c FROM agent_logs
+            WHERE (prompt_tokens > 0 OR completion_tokens > 0 OR estimated_prompt_tokens > 0) AND {range_sql}
+            """,
+            range_param,
+        )["c"]
+
+        slow_requests = query_one(
+            conn,
+            f"SELECT COUNT(*) AS c FROM request_logs WHERE duration_ms > 1000 AND {range_sql}",
+            range_param,
+        )["c"]
+
+        itineraries = query_one(conn, "SELECT COUNT(*) AS c FROM itineraries")["c"]
+
+        actual_total = token_row["p"] + token_row["c"]
+        estimated_total = estimated_row["p"] + estimated_row["c"]
+        estimate_accuracy = max(
+            0.0,
+            1 - abs(estimated_total - actual_total) / max(actual_total, 1)
+            if estimated_total > 0 else 0.0
+        )
+
+        return {
+            "success": True,
+            "data": {
+                "requests": {
+                    "total_requests": request_stats["total_requests"],
+                    "avg_duration_ms": round(request_stats["avg_duration_ms"] or 0, 2),
+                    "error_requests": request_stats["error_requests"],
+                    "error_rate": (
+                        request_stats["error_requests"] / request_stats["total_requests"]
+                        if request_stats["total_requests"] else 0.0
+                    ),
+                    "p95_duration_ms": round(p95_duration_ms, 2),
+                    "slow_requests": slow_requests,
+                },
+                "cache": {
+                    "total_entries": total_entries,
+                    "total_hits": total_hits,
+                    "hit_rate": round(hit_rate, 4),
+                    "avg_latency_ms": round(avg_latency, 2) if avg_latency else 0,
+                },
+                "llm": {
+                    "total_prompt_tokens": token_row["p"],
+                    "total_completion_tokens": token_row["c"],
+                    "total_tokens": actual_total,
+                    "estimated_prompt_tokens": estimated_row["p"],
+                    "estimated_completion_tokens": estimated_row["c"],
+                    "estimated_total_tokens": estimated_total,
+                    "estimate_accuracy": round(estimate_accuracy, 4),
+                    "call_count": llm_call_count,
                 },
                 "agents": {
                     "total_logs": total_logs,
                     "completed_logs": completed_logs,
                     "success_rate": round(success_rate, 4),
                 },
+                "itineraries": itineraries,
             },
         }
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/dashboard/trends")
+async def dashboard_trends(range: str = "7d"):
+    """L2 趋势分析：Token 趋势 + 请求趋势"""
+    range_sql, range_param = _dashboard_range_clause(range)
+
+    if range == "24h":
+        time_group = "STRFTIME('%Y-%m-%d %H:00', created_at)"
+        time_label = "label"
+    else:
+        time_group = "DATE(created_at)"
+        time_label = "label"
+
+    conn = get_db_connection()
+    try:
+        token_trends = query_all(
+            conn,
+            f"""
+            SELECT
+                {time_group} AS {time_label},
+                COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                COUNT(*) AS call_count
+            FROM agent_logs
+            WHERE {range_sql}
+            GROUP BY {time_label}
+            ORDER BY {time_label} ASC
+            """,
+            range_param,
+        )
+
+        request_trends = query_all(
+            conn,
+            f"""
+            SELECT
+                {time_group} AS {time_label},
+                COUNT(*) AS total_requests,
+                COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
+                SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS error_requests
+            FROM request_logs
+            WHERE {range_sql}
+            GROUP BY {time_label}
+            ORDER BY {time_label} ASC
+            """,
+            range_param,
+        )
+
+        return {
+            "success": True,
+            "data": {
+                "token_trends": token_trends,
+                "request_trends": request_trends,
+            },
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/dashboard/agents")
+async def dashboard_agents(range: str = "24h"):
+    """L3 细粒度分布：Agent 调用占比与成功率明细"""
+    range_sql, range_param = _dashboard_range_clause(range)
+    conn = get_db_connection()
+    try:
+        by_type = query_all(
+            conn,
+            f"""
+            SELECT
+                agent_type,
+                COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                COUNT(*) AS call_count,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS success_count
+            FROM agent_logs
+            WHERE {range_sql}
+            GROUP BY agent_type
+            ORDER BY call_count DESC
+            """,
+            range_param,
+        )
+        return {"success": True, "data": {"by_type": by_type}}
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/dashboard/requests")
+async def dashboard_requests(range: str = "24h", limit: int = 50, offset: int = 0):
+    """L4 明细：请求日志"""
+    range_sql, range_param = _dashboard_range_clause(range)
+    conn = get_db_connection()
+    try:
+        logs = query_all(
+            conn,
+            f"""
+            SELECT * FROM request_logs
+            WHERE {range_sql}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*range_param, limit, offset),
+        )
+        total = query_one(
+            conn,
+            f"SELECT COUNT(*) AS c FROM request_logs WHERE {range_sql}",
+            range_param,
+        )["c"]
+        return {"success": True, "data": logs, "total": total, "limit": limit, "offset": offset}
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/dashboard/agent-logs")
+async def dashboard_agent_logs(range: str = "24h", limit: int = 50, offset: int = 0):
+    """L4 明细：Agent 调用日志"""
+    range_sql, range_param = _dashboard_range_clause(range)
+    conn = get_db_connection()
+    try:
+        logs = query_all(
+            conn,
+            f"""
+            SELECT * FROM agent_logs
+            WHERE {range_sql}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*range_param, limit, offset),
+        )
+        total = query_one(
+            conn,
+            f"SELECT COUNT(*) AS c FROM agent_logs WHERE {range_sql}",
+            range_param,
+        )["c"]
+        return {"success": True, "data": logs, "total": total, "limit": limit, "offset": offset}
     finally:
         conn.close()
 
@@ -430,6 +1086,51 @@ async def ingest_knowledge():
         return {"success": True, "message": f"知识库导入完成，共 {count} 篇文档"}
     except Exception as e:
         return {"success": False, "message": f"导入失败: {str(e)}"}
+
+
+@app.get("/api/admin/request-logs")
+async def get_request_logs(limit: int = 100, offset: int = 0, path: str | None = None):
+    """
+    获取 API 请求日志
+
+    Args:
+        limit: 返回条数
+        offset: 分页偏移
+        path: 按请求路径过滤（可选）
+    """
+    conn = get_db_connection()
+    try:
+        if path:
+            logs = query_all(
+                conn,
+                """
+                SELECT * FROM request_logs
+                WHERE path = ?
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (path, limit, offset),
+            )
+            total = query_one(
+                conn,
+                "SELECT COUNT(*) AS c FROM request_logs WHERE path = ?",
+                (path,),
+            )["c"]
+        else:
+            logs = query_all(
+                conn,
+                """
+                SELECT * FROM request_logs
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            )
+            total = query_one(conn, "SELECT COUNT(*) AS c FROM request_logs")["c"]
+
+        return {"success": True, "data": logs, "total": total, "limit": limit, "offset": offset}
+    finally:
+        conn.close()
 
 
 # ============================================================
@@ -488,7 +1189,7 @@ async def get_weather(city: str, days: int = 3):
 @app.get("/api/ping")
 async def ping():
     """健康检查"""
-    return {"ok": True, "version": "3.0.0", "features": ["planner-agent", "llm", "weather", "map", "db-mock"]}
+    return {"ok": True, "version": "3.0.0", "features": ["planner-agent", "llm", "weather", "map", "db-mock", "mcp-server", "request-logs", "metrics-viz"]}
 
 
 # 兼容旧版入口

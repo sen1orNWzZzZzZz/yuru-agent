@@ -23,7 +23,10 @@
             <div class="navbar-nav">
                 <a href="/" class="{% if request.path == '/' %}active{% endif %}">首页</a>
                 <a href="/plan" class="{% if request.path == '/plan' %}active{% endif %}">智能规划</a>
-                <a href="/admin">系统管理</a>
+                <a href="/admin" class="{% if request.path.startswith('/admin') %}active{% endif %}">系统管理</a>
+            </div>
+            <div class="navbar-nav" id="authNav">
+                <a href="/login" class="{% if request.path == '/login' %}active{% endif %}">登录</a>
             </div>
         </div>
     </nav>
@@ -69,6 +72,28 @@
             });
             return r.json();
         }
+
+        async function updateAuthNav() {
+            try {
+                const r = await apiGet('/api/auth/me');
+                const nav = document.getElementById('authNav');
+                if (!nav) return;
+                if (r.success) {
+                    nav.innerHTML = `
+                        <a href="/plan">${r.data.username}</a>
+                        <a href="#" onclick="logout();return false;">退出</a>
+                    `;
+                }
+            } catch (e) {}
+        }
+
+        async function logout() {
+            await apiPost('/api/auth/logout', {});
+            showToast('已退出', 'info');
+            setTimeout(() => location.href = '/', 400);
+        }
+
+        document.addEventListener('DOMContentLoaded', updateAuthNav);
     </script>
     <script src="/static/js/main.js"></script>
     {% block extra_js %}{% endblock %}

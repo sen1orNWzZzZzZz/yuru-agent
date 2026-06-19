@@ -62,6 +62,7 @@ def migrate_db():
     当前处理：
     - 创建 llm_cache 表（如缺失）
     - 为 agent_logs 增加 prompt_tokens / completion_tokens 字段（如缺失）
+    - 创建 request_logs 表（如缺失）
     """
     conn = get_db_connection()
     try:
@@ -93,6 +94,74 @@ def migrate_db():
             cursor.execute("ALTER TABLE agent_logs ADD COLUMN prompt_tokens INTEGER DEFAULT 0")
         if "completion_tokens" not in columns:
             cursor.execute("ALTER TABLE agent_logs ADD COLUMN completion_tokens INTEGER DEFAULT 0")
+        if "estimated_prompt_tokens" not in columns:
+            cursor.execute("ALTER TABLE agent_logs ADD COLUMN estimated_prompt_tokens INTEGER DEFAULT 0")
+        if "estimated_completion_tokens" not in columns:
+            cursor.execute("ALTER TABLE agent_logs ADD COLUMN estimated_completion_tokens INTEGER DEFAULT 0")
+
+        user_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(users)").fetchall()}
+        if "password_hash" not in user_columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)")
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                display_name VARCHAR(100),
+                age_group VARCHAR(20),
+                companion_type VARCHAR(50),
+                interests TEXT,
+                pace VARCHAR(20),
+                budget_range INTEGER,
+                dietary_restrictions TEXT,
+                accessibility_needs TEXT,
+                preferred_transport VARCHAR(50),
+                home_city VARCHAR(100),
+                must_visit_tags TEXT,
+                avoid_tags TEXT,
+                llm_summary TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_profiles_user ON user_profiles(user_id)")
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS external_poi_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider VARCHAR(50) NOT NULL,
+                city VARCHAR(100) NOT NULL,
+                keywords VARCHAR(200) NOT NULL,
+                poi_type VARCHAR(50),
+                results_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_external_poi_cache_lookup ON external_poi_cache(provider, city, keywords, poi_type)")
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS request_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                method VARCHAR(10) NOT NULL,
+                path TEXT NOT NULL,
+                query_params TEXT,
+                status_code INTEGER,
+                duration_ms REAL,
+                client_ip TEXT,
+                user_agent TEXT,
+                error_message TEXT
+            )
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_path ON request_logs(path)")
 
         conn.commit()
         print("[DB] 数据库迁移完成")

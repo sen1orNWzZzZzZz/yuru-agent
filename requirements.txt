@@ -23,3 +23,10 @@ pyyaml>=6.0.0
 
 # MCP Server
 mcp>=1.0.0
+
+# Token 预估
+tiktoken>=0.7.0
+
+# 认证
+bcrypt>=4.0.0
+itsdangerous>=2.1.2
