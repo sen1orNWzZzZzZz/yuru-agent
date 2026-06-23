@@ -80,6 +80,7 @@
                 if (!nav) return;
                 if (r.success) {
                     nav.innerHTML = `
+                        <a href="/history">历史行程</a>
                         <a href="/plan">${r.data.username}</a>
                         <a href="#" onclick="logout();return false;">退出</a>
                     `;
@@ -97,5 +98,6 @@
     </script>
     <script src="/static/js/main.js"></script>
     {% block extra_js %}{% endblock %}
+    {% block scripts %}{% endblock %}
 </body>
 </html>

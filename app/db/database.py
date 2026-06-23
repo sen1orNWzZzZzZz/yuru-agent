@@ -103,6 +103,12 @@ def migrate_db():
         if "password_hash" not in user_columns:
             cursor.execute("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)")
 
+        itinerary_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(itineraries)").fetchall()}
+        if "itinerary_json" not in itinerary_columns:
+            cursor.execute("ALTER TABLE itineraries ADD COLUMN itinerary_json TEXT")
+        if "planning_trace" not in itinerary_columns:
+            cursor.execute("ALTER TABLE itineraries ADD COLUMN planning_trace TEXT")
+
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS user_profiles (
@@ -163,8 +169,67 @@ def migrate_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_path ON request_logs(path)")
 
-        conn.commit()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS planning_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER REFERENCES users(id),
+                itinerary_id INTEGER REFERENCES itineraries(id),
+                parent_run_id INTEGER REFERENCES planning_runs(id),
+                status VARCHAR(20) DEFAULT 'pending',
+                input_params TEXT,
+                idempotency_key VARCHAR(64),
+                current_step INTEGER DEFAULT 0,
+                total_steps INTEGER DEFAULT 0,
+                error_message TEXT,
+                claimed_at TIMESTAMP,
+                claimed_by VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS planning_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL REFERENCES planning_runs(id) ON DELETE CASCADE,
+                step_number INTEGER NOT NULL,
+                step_type VARCHAR(50) NOT NULL,
+                tool_name VARCHAR(50),
+                tool_input TEXT,
+                content TEXT,
+                observation_json TEXT,
+                cached_result_json TEXT,
+                status VARCHAR(20) DEFAULT 'completed',
+                duration_ms INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        # 为已存在的 planning_runs 补齐后续新增字段
+        run_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(planning_runs)").fetchall()}
+        if "parent_run_id" not in run_columns:
+            cursor.execute("ALTER TABLE planning_runs ADD COLUMN parent_run_id INTEGER REFERENCES planning_runs(id)")
+        if "idempotency_key" not in run_columns:
+            cursor.execute("ALTER TABLE planning_runs ADD COLUMN idempotency_key VARCHAR(64)")
+        if "claimed_at" not in run_columns:
+            cursor.execute("ALTER TABLE planning_runs ADD COLUMN claimed_at TIMESTAMP")
+        if "claimed_by" not in run_columns:
+            cursor.execute("ALTER TABLE planning_runs ADD COLUMN claimed_by VARCHAR(100)")
+
+        # 为已存在的 planning_steps 补齐后续新增字段
+        step_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(planning_steps)").fetchall()}
+        if "cached_result_json" not in step_columns:
+            cursor.execute("ALTER TABLE planning_steps ADD COLUMN cached_result_json TEXT")
+
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_runs_user ON planning_runs(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_runs_status ON planning_runs(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_runs_idempotency ON planning_runs(user_id, idempotency_key)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_runs_claimed ON planning_runs(claimed_at)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_steps_run ON planning_steps(run_id)")
         print("[DB] 数据库迁移完成")
+        conn.commit()
     finally:
         conn.close()
 

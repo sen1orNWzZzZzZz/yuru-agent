@@ -20,7 +20,7 @@ class WeatherAgent(BaseAgentV3):
         self.llm_cache_ttl = 3600
 
     def _execute_with_db(self, context: dict[str, Any]) -> dict[str, Any]:
-        city = context.get("destination", "杭州")
+        city = context.get("city") or context.get("destination", "杭州")
         days = context.get("days", 3)
 
         current = self.weather.get_current_weather(city)
@@ -39,7 +39,7 @@ class WeatherAgent(BaseAgentV3):
         }
 
     def _build_prompt(self, context: dict, db_data: dict) -> tuple:
-        city = context.get("destination", "")
+        city = context.get("city") or context.get("destination", "")
         days = context.get("days", 3)
         style = context.get("style", "")
 

@@ -7,14 +7,17 @@ import json
 import logging
 import math
 import time
-from typing import Any
+from typing import Any, Callable
 
+from app.agents.v3.base import AgentResult
+from app.agents.v3.planning_run import PlanningRunService
+from app.agents.v3.planner_runtime import PlannerRuntime
 from app.agents.v3.poi_agent import AttractionAgent, HotelAgent, RestaurantAgent, TransportAgent
+from app.agents.v3.profile_agent import ProfileSummarizerAgent
 from app.agents.v3.risk_agent import RiskAgent
+from app.agents.v3.tools import agent_result_to_observation, build_tool_registry
 from app.agents.v3.weather_agent import WeatherAgent
 from app.integrations.llm_client import LLMClient
-
-from app.agents.v3.profile_agent import ProfileSummarizerAgent
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +104,7 @@ class PlannerAgent:
         self.llm = LLMClient()
         self.use_llm = self.llm.is_available()
 
-        # 初始化所有子Agent
+        # 初始化所有子Agent（用于无LLM时的并行兜底）
         self.weather_agent = WeatherAgent(self.llm)
         self.hotel_agent = HotelAgent(self.llm)
         self.restaurant_agent = RestaurantAgent(self.llm)
@@ -109,17 +112,27 @@ class PlannerAgent:
         self.transport_agent = TransportAgent(self.llm)
         self.risk_agent = RiskAgent(self.llm)
 
-    def plan(self, destination: str, days: int = 3, travelers: int = 2,
-             budget: int = None, origin: str = "上海", style: str = "balanced",
-             preferences: dict | None = None,
-             user_id: int | None = None) -> dict[str, Any]:
+        # 注册 Tool，供 LLM 决策调用
+        self.tool_registry = build_tool_registry(self.llm)
+
+    def plan(
+        self,
+        destination: str,
+        days: int = 3,
+        travelers: int = 2,
+        budget: int = None,
+        origin: str = "上海",
+        style: str = "balanced",
+        preferences: dict | None = None,
+        user_id: int | None = None,
+        run_id: int | None = None,
+    ) -> dict[str, Any]:
         """
-        主规划流程
-        1. 解析用户需求
-        2. 并行执行子Agent
-        3. 风控检查
-        4. LLM整合生成行程 / 模板生成
-        5. 保存到数据库
+        主规划流程（同步版）
+        - 可外部传入 run_id，复用已有 PlanningRun
+        - 有 LLM 时：使用 PlannerRuntime 工具决策循环
+        - 无 LLM 时：串行执行子Agent + 模板生成（兜底）
+        - 完成后更新 Run 状态
         """
         total_start = time.time()
         context = {
@@ -135,40 +148,230 @@ class PlannerAgent:
 
         logger.info(f"[Planner] 开始规划: {destination} {days}天 {travelers}人")
 
-        # Step 1: 并行执行子Agent (天气/酒店/餐厅/景点/交通)
-        results = self._execute_sub_agents(context)
-
-        # Step 2: 风控检查
-        risk_context = {**context, **results}
-        risk_result = self.risk_agent.execute(risk_context)
-
-        # Step 3: 整合生成行程
-        if self.use_llm:
-            itinerary = self._generate_with_llm(context, results, risk_result)
+        run_service = PlanningRunService()
+        if run_id is None:
+            run_id = run_service.create_run(user_id, context)
         else:
-            itinerary = self._generate_template(context, results, risk_result)
+            run_service.update_status(run_id, "running")
 
-        total_duration = int((time.time() - total_start) * 1000)
+        try:
+            if self.use_llm:
+                runtime = PlannerRuntime(
+                    self.llm, self.tool_registry, max_steps=10,
+                    run_service=run_service, run_id=run_id,
+                )
+                runtime_result = runtime.run(context)
+                results = runtime_result["results"]
+                risk_result = runtime_result["risk"]
+                planning_trace = runtime_result["steps"]
+                itinerary = self._generate_with_llm(context, results, risk_result)
+            else:
+                results, risk_result, planning_trace = self._execute_fallback(
+                    context, run_service=run_service, run_id=run_id
+                )
+                itinerary = self._generate_template(context, results, risk_result)
 
-        # 保存到数据库
-        itinerary_id = self._save_itinerary(context, itinerary, results, user_id=user_id)
+            total_duration = int((time.time() - total_start) * 1000)
+            itinerary_id = self._save_itinerary(
+                context, itinerary, results,
+                planning_trace=planning_trace,
+                user_id=user_id,
+            )
+            run_service.update_status(
+                run_id, "completed",
+                itinerary_id=itinerary_id,
+                total_steps=len(planning_trace),
+            )
 
-        # 登录用户：自动总结并更新画像
-        if user_id:
-            ProfileSummarizerAgent().summarize(user_id, context, itinerary)
+            if user_id:
+                ProfileSummarizerAgent().summarize(user_id, context, itinerary)
 
-        return {
-            "success": True,
-            "itinerary_id": itinerary_id,
-            "destination": destination,
-            "days": days,
-            "travelers": travelers,
-            "llm_used": self.use_llm,
-            "itinerary": itinerary,
-            "agent_results": {k: v.to_dict() for k, v in results.items()},
-            "risk": risk_result.to_dict(),
-            "total_duration_ms": total_duration,
+            return {
+                "success": True,
+                "run_id": run_id,
+                "itinerary_id": itinerary_id,
+                "destination": destination,
+                "days": days,
+                "travelers": travelers,
+                "budget": budget,
+                "origin": origin,
+                "style": style,
+                "llm_used": self.use_llm,
+                "itinerary": itinerary,
+                "agent_results": {k: v.to_dict() for k, v in results.items()},
+                "risk": risk_result.to_dict(),
+                "total_duration_ms": total_duration,
+                "planning_trace": planning_trace,
+            }
+        except Exception as e:
+            logger.exception(f"[Planner] run_id={run_id} 规划失败")
+            run_service.update_status(run_id, "failed", error_message=str(e))
+            raise
+
+    def plan_stream(
+        self,
+        context: dict[str, Any],
+        user_id: int | None,
+        on_step: Callable[[dict], None] | None = None,
+        run_id: int | None = None,
+        initial_results: dict[str, AgentResult] | None = None,
+    ) -> dict[str, Any]:
+        """
+        流式规划流程
+        与 plan() 逻辑一致，但每产生一个 step 都会调用 on_step 回调，供 SSE 实时推送。
+        支持外部传入 run_id 和 initial_results（断点续跑）。
+        """
+        run_service = PlanningRunService()
+        if run_id is None:
+            run_id = run_service.create_run(user_id, context)
+        else:
+            run_service.update_status(run_id, "running")
+
+        def combined_on_step(step: dict) -> None:
+            if on_step:
+                on_step(step)
+
+        try:
+            if self.use_llm:
+                runtime = PlannerRuntime(
+                    self.llm, self.tool_registry, max_steps=10,
+                    on_step=combined_on_step,
+                    run_service=run_service, run_id=run_id,
+                    initial_results=initial_results,
+                )
+                runtime_result = runtime.run(context)
+                results = runtime_result["results"]
+                risk_result = runtime_result["risk"]
+                planning_trace = runtime_result["steps"]
+                itinerary = self._generate_with_llm(context, results, risk_result)
+            else:
+                results, risk_result, planning_trace = self._execute_fallback(
+                    context,
+                    run_service=run_service,
+                    run_id=run_id,
+                    on_step=combined_on_step,
+                    initial_results=initial_results,
+                )
+                itinerary = self._generate_template(context, results, risk_result)
+
+            itinerary_id = self._save_itinerary(
+                context, itinerary, results,
+                planning_trace=planning_trace,
+                user_id=user_id,
+            )
+            run_service.update_status(
+                run_id, "completed",
+                itinerary_id=itinerary_id,
+                total_steps=len(planning_trace),
+            )
+
+            if user_id:
+                ProfileSummarizerAgent().summarize(user_id, context, itinerary)
+
+            return {
+                "success": True,
+                "run_id": run_id,
+                "itinerary_id": itinerary_id,
+                "llm_used": self.use_llm,
+                "itinerary": itinerary,
+                "agent_results": {k: v.to_dict() for k, v in results.items()},
+                "risk": risk_result.to_dict(),
+                "planning_trace": planning_trace,
+            }
+        except Exception as e:
+            logger.exception(f"[Planner] run_id={run_id} 流式规划失败")
+            run_service.update_status(run_id, "failed", error_message=str(e))
+            raise
+
+    def _execute_fallback(
+        self,
+        context: dict,
+        run_service: PlanningRunService,
+        run_id: int,
+        on_step: Callable[[dict], None] | None = None,
+        initial_results: dict[str, AgentResult] | None = None,
+    ) -> tuple[dict[str, AgentResult], Any, list[dict]]:
+        """
+        无 LLM 时的兜底执行：按固定顺序串行执行子Agent，并记录每一步。
+        支持从 initial_results 恢复已完成的步骤（断点续跑）。
+        Returns: (results, risk_result, planning_trace)
+        """
+        results: dict[str, AgentResult] = dict(initial_results or {})
+        planning_trace: list[dict] = []
+
+        def emit(step: dict, cached_result: AgentResult | None = None) -> None:
+            planning_trace.append(step)
+            run_service.add_step(
+                run_id=run_id,
+                step_number=step.get("step", 0),
+                step_type=step["type"],
+                content=step.get("content", ""),
+                tool_name=step.get("tool"),
+                tool_input=step.get("tool_input"),
+                observation=step.get("result") if step["type"] == "observation" else None,
+                cached_result=cached_result if step["type"] == "observation" else None,
+                status="failed" if step.get("error") else "completed",
+                duration_ms=step.get("result", {}).get("duration_ms", 0) if step.get("result") else 0,
+            )
+            if on_step:
+                on_step(step)
+
+        thought = {"type": "thought", "step": 0, "content": "LLM 未启用，使用串行子Agent兜底策略。"}
+        emit(thought)
+
+        agent_order = [
+            ("weather", self.weather_agent),
+            ("hotel", self.hotel_agent),
+            ("restaurant", self.restaurant_agent),
+            ("attraction", self.attraction_agent),
+            ("transport", self.transport_agent),
+        ]
+        for idx, (name, agent) in enumerate(agent_order, start=1):
+            result_key = f"{name}_result"
+            if result_key in results and results[result_key].status == "completed":
+                # 断点续跑：已完成的步骤直接回放，不再调用 Agent
+                result = results[result_key]
+                tool_step = {"type": "tool_call", "step": idx, "tool": name, "tool_input": {}}
+                emit(tool_step)
+                obs_step = {
+                    "type": "observation",
+                    "step": idx,
+                    "tool": name,
+                    "tool_input": {},
+                    "result": agent_result_to_observation(result),
+                }
+                emit(obs_step, cached_result=result)
+                continue
+
+            tool_step = {"type": "tool_call", "step": idx, "tool": name, "tool_input": {}}
+            emit(tool_step)
+
+            result = agent.execute(context)
+            results[result_key] = result
+
+            obs_step = {
+                "type": "observation",
+                "step": idx,
+                "tool": name,
+                "tool_input": {},
+                "result": agent_result_to_observation(result),
+            }
+            emit(obs_step, cached_result=result)
+
+        risk_tool = {"type": "tool_call", "step": len(agent_order) + 1, "tool": "risk", "tool_input": {}}
+        emit(risk_tool)
+        risk_result = self.risk_agent.execute({**context, **results})
+        risk_obs = {
+            "type": "observation",
+            "step": len(agent_order) + 1,
+            "tool": "risk",
+            "tool_input": {},
+            "result": agent_result_to_observation(risk_result),
         }
+        emit(risk_obs, cached_result=risk_result)
+
+        run_service.update_status(run_id, "running", total_steps=len(planning_trace))
+        return results, risk_result, planning_trace
 
     def _execute_sub_agents(self, context: dict) -> dict[str, Any]:
         """并行执行所有子Agent"""
@@ -219,11 +422,17 @@ class PlannerAgent:
         """模板方式生成行程（无LLM时的降级方案）"""
         days = context["days"]
         destination = context["destination"]
-        weather_data = results["weather_result"].data
-        hotels = results["hotel_result"].data.get("hotels", [])
-        restaurants = results["restaurant_result"].data.get("restaurants", [])
-        attractions = results["attraction_result"].data.get("attractions", [])
-        transport = results["transport_result"].data
+        weather_result = results.get("weather_result")
+        hotel_result = results.get("hotel_result")
+        restaurant_result = results.get("restaurant_result")
+        attraction_result = results.get("attraction_result")
+        transport_result = results.get("transport_result")
+
+        weather_data = weather_result.data if weather_result else {}
+        hotels = hotel_result.data.get("hotels", []) if hotel_result else []
+        restaurants = restaurant_result.data.get("restaurants", []) if restaurant_result else []
+        attractions = attraction_result.data.get("attractions", []) if attraction_result else []
+        transport = transport_result.data if transport_result else {}
 
         selected_hotel = hotels[0] if hotels else None
         h_lat = selected_hotel.get("latitude") if selected_hotel else None
@@ -240,11 +449,18 @@ class PlannerAgent:
             attractions = sorted(attractions, key=distance_to_hotel)
             restaurants = sorted(restaurants, key=distance_to_hotel)
 
-        # 分配景点到每天
+        # 分配景点到每天，保证每天至少 1 个（景点总数不足时优先填满前几天）
         day_plans = []
         for i in range(days):
-            day_attractions = attractions[i*2:(i+1)*2] if i*2 < len(attractions) else []
-            day_restaurants = restaurants[i*2:(i+1)*2] if i*2 < len(restaurants) else []
+            day_attractions = []
+            if i < len(attractions):
+                day_attractions.append(attractions[i])
+            # 若景点富余，每天再补一个
+            second_idx = days + i
+            if second_idx < len(attractions):
+                day_attractions.append(attractions[second_idx])
+
+            day_restaurants = restaurants[i * 2:(i + 1) * 2] if i * 2 < len(restaurants) else []
 
             activities = []
             if selected_hotel and i == 0:
@@ -286,11 +502,12 @@ class PlannerAgent:
 
     def _build_itinerary_prompt(self, context: dict, results: dict, risk_result) -> str:
         """构建LLM行程生成提示词"""
-        weather = results["weather_result"]
-        hotel = results["hotel_result"]
-        restaurant = results["restaurant_result"]
-        attraction = results["attraction_result"]
-        transport = results["transport_result"]
+        empty = AgentResult(agent_type="", agent_name="")
+        weather = results.get("weather_result", empty)
+        hotel = results.get("hotel_result", empty)
+        restaurant = results.get("restaurant_result", empty)
+        attraction = results.get("attraction_result", empty)
+        transport = results.get("transport_result", empty)
 
         return f"""请为以下旅行生成结构化行程：
 
@@ -333,7 +550,9 @@ class PlannerAgent:
 
 请输出符合 JSON Schema 的行程对象，不要包含 markdown 代码块。"""
 
-    def _save_itinerary(self, context: dict, itinerary: dict, results: dict, user_id: int | None = None) -> int:
+    def _save_itinerary(self, context: dict, itinerary: dict, results: dict,
+                        planning_trace: list[dict] | None = None,
+                        user_id: int | None = None) -> int:
         """保存行程到数据库"""
         try:
             from app.db.database import execute, get_db_connection
@@ -342,8 +561,8 @@ class PlannerAgent:
             # 保存行程
             it_id = execute(conn, """
                 INSERT INTO itineraries (user_id, title, destination, origin, start_date, end_date,
-                    traveler_count, budget, travel_style, status, llm_used)
-                VALUES (?, ?, ?, ?, date('now'), date('now', ?), ?, ?, ?, 'planned', ?)
+                    traveler_count, budget, travel_style, status, llm_used, itinerary_json, planning_trace)
+                VALUES (?, ?, ?, ?, date('now'), date('now', ?), ?, ?, ?, 'planned', ?, ?, ?)
             """, (
                 user_id,
                 itinerary.get("title", f"{context['destination']}之旅"),
@@ -354,6 +573,8 @@ class PlannerAgent:
                 context.get("budget"),
                 context.get("style", "balanced"),
                 self.use_llm,
+                json.dumps(itinerary, ensure_ascii=False),
+                json.dumps(planning_trace or [], ensure_ascii=False),
             ))
 
             # 保存Agent日志
@@ -366,7 +587,7 @@ class PlannerAgent:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     it_id, result.agent_type, result.agent_name, result.status,
-                    json.dumps(result.data, ensure_ascii=False)[:2000],
+                    json.dumps(result.data, ensure_ascii=False),
                     result.duration_ms,
                     usage.get("prompt_tokens", 0),
                     usage.get("completion_tokens", 0),

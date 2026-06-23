@@ -13,21 +13,28 @@ class RiskAgent(BaseAgentV3):
     agent_type = "risk"
     agent_name = "风控Agent"
 
+    @staticmethod
+    def _unwrap(value: Any) -> Any:
+        """兼容 dict 与 AgentResult：Planner 可能把 AgentResult 对象传进来"""
+        if hasattr(value, "data"):
+            return value.data
+        return value
+
     def _execute_with_db(self, context: dict[str, Any]) -> dict[str, Any]:
         budget = context.get("budget")
         travelers = context.get("travelers", 2)
         days = context.get("days", 3)
 
-        # 从其他Agent结果中提取数据
-        hotel_data = context.get("hotel_result", {})
-        attraction_data = context.get("attraction_result", {})
-        weather_data = context.get("weather_result", {})
+        # 从其他Agent结果中提取数据（可能是 AgentResult 或 dict）
+        hotel_data = self._unwrap(context.get("hotel_result", {}))
+        attraction_data = self._unwrap(context.get("attraction_result", {}))
+        weather_data = self._unwrap(context.get("weather_result", {}))
 
         warnings: list[dict] = []
 
         # 1. 预算风险
         if budget:
-            hotels = hotel_data.get("data", {}).get("hotels", [])
+            hotels = hotel_data.get("hotels", [])
             if hotels:
                 avg_hotel = sum(h.get("price_value", 0) for h in hotels[:3]) / min(len(hotels), 3)
                 est_hotel = avg_hotel * days
@@ -39,7 +46,7 @@ class RiskAgent(BaseAgentV3):
                     })
 
         # 2. 高反风险
-        risks = attraction_data.get("data", {}).get("altitude_risks", [])
+        risks = attraction_data.get("altitude_risks", [])
         for r in risks:
             level = "high" if r["altitude"] > 3500 else "medium"
             warnings.append({
@@ -49,7 +56,7 @@ class RiskAgent(BaseAgentV3):
             })
 
         # 3. 天气风险
-        current = weather_data.get("data", {}).get("current", {})
+        current = weather_data.get("current", {})
         if current.get("description") in ["暴雨", "大雨", "台风"]:
             warnings.append({
                 "type": "weather", "level": "high",

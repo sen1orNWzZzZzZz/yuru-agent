@@ -1,0 +1,176 @@
+{% extends "base_v3.html" %}
+
+{% block title %}行程详情 - 灵动旅心 V3{% endblock %}
+
+{% block extra_css %}
+<style>
+.result-loading { text-align:center; padding: 60px 20px; color: var(--text-secondary); }
+.result-error { text-align:center; padding: 40px 20px; color: var(--danger); }
+
+/* Planner 思考链时间轴 */
+.planning-trace-card { margin-bottom: 24px; }
+.trace-timeline { display: flex; flex-direction: column; gap: 14px; }
+.trace-step { display: flex; gap: 12px; align-items: flex-start; }
+.trace-step-icon { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--bg-soft); font-size: 0.9rem; flex-shrink: 0; }
+.trace-step-body { flex: 1; }
+.trace-step-title { font-weight: 600; font-size: 0.85rem; color: var(--text); }
+.trace-step-content { font-size: 0.8rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.6; white-space: pre-wrap; }
+.trace-step.tool_call .trace-step-icon { background: var(--accent-soft); }
+.trace-step.observation .trace-step-icon { background: var(--info-soft); }
+.trace-step.thought .trace-step-icon { background: var(--success-soft); }
+
+.run-status-card { padding: 16px; }
+.status-completed { background: var(--success-soft); color: var(--success); }
+.status-failed { background: var(--danger-soft); color: var(--danger); }
+.status-running { background: var(--info-soft); color: var(--info); }
+.status-retrying { background: var(--warning-soft); color: var(--warning); }
+
+/* 折叠的思考链头部 */
+.trace-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; padding: 4px 0; user-select: none; }
+.trace-header-left { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--text); }
+.trace-count { font-size: 0.75rem; color: var(--text-muted); font-weight: 400; background: var(--bg-soft); padding: 2px 8px; border-radius: 999px; }
+.trace-chevron { transition: transform 0.2s ease; color: var(--text-muted); }
+.trace-chevron.expanded { transform: rotate(180deg); }
+
+/* Agent 卡片 Chevron */
+.agent-chevron { transition: transform 0.2s ease; }
+.agent-chevron.expanded { transform: rotate(180deg); }
+
+/* 天气详情 */
+.weather-detail-current { background: linear-gradient(135deg, var(--info-soft) 0%, #e0f2fe 100%); border-radius: var(--radius-sm); padding: 18px; margin-bottom: 16px; }
+.weather-current-main { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+.weather-current-icon { font-size: 3rem; line-height: 1; }
+.weather-current-temp { font-size: 2.6rem; font-weight: 300; font-family: var(--font-display); color: var(--text); }
+.weather-current-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 12px; }
+.weather-meta-item { background: rgba(255,255,255,0.7); border-radius: var(--radius-xs); padding: 10px 12px; }
+.weather-meta-label { font-size: 0.7rem; color: var(--text-muted); margin-bottom: 2px; }
+.weather-meta-value { font-size: 0.9rem; font-weight: 500; color: var(--text); }
+.weather-advice { margin-top: 14px; font-size: 0.85rem; color: var(--text-secondary); background: rgba(255,255,255,0.65); padding: 10px 14px; border-radius: var(--radius-xs); }
+.weather-forecast-title { font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+.weather-forecast { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
+.weather-day-card { flex: 0 0 auto; min-width: 100px; background: var(--bg-soft); border-radius: var(--radius-sm); padding: 14px 10px; text-align: center; }
+.weather-day-date { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 6px; }
+.weather-day-icon { font-size: 1.8rem; margin-bottom: 6px; }
+.weather-day-desc { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 8px; min-height: 1.6em; }
+.weather-day-temp { font-size: 0.85rem; font-weight: 500; color: var(--text); }
+
+/* 原始数据兜底 */
+.raw-json-block { background: var(--bg-soft); border-radius: var(--radius-xs); padding: 12px; font-size: 0.75rem; color: var(--text-secondary); max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="messageBox" class="result-loading">正在加载行程详情...</div>
+<div id="runStatusBox" style="display:none; margin-bottom: 20px;"></div>
+<div id="resultSection" style="display:none;"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/result_renderer.js"></script>
+<script>
+const itineraryId = {{ itinerary_id }};
+let currentRunId = null;
+
+async function loadItinerary() {
+    const box = document.getElementById('messageBox');
+    const sec = document.getElementById('resultSection');
+    try {
+        const r = await fetch('/api/v3/plan/' + itineraryId);
+        const data = await r.json();
+        if (!data.success) {
+            box.textContent = data.message || '加载失败';
+            box.className = 'result-error';
+            return;
+        }
+        box.style.display = 'none';
+        sec.style.display = 'block';
+        const renderData = {...data.data, itinerary: data.data.plan || {}};
+        renderResult(renderData);
+        if (data.data.run_id) {
+            currentRunId = data.data.run_id;
+            loadRunStatus(currentRunId);
+        }
+    } catch (e) {
+        box.textContent = '加载异常: ' + e.message;
+        box.className = 'result-error';
+    }
+}
+
+async function loadRunStatus(runId) {
+    const box = document.getElementById('runStatusBox');
+    try {
+        const r = await fetch('/api/v3/runs/' + runId);
+        const data = await r.json();
+        if (!data.success) return;
+        const run = data.data.run;
+        const steps = data.data.steps || [];
+        const statusClass = {
+            completed: 'status-completed',
+            failed: 'status-failed',
+            running: 'status-running',
+            retrying: 'status-retrying',
+            pending: 'status-running',
+        }[run.status] || 'tag-muted';
+        const statusText = {
+            completed: '已完成',
+            failed: '失败',
+            running: '运行中',
+            retrying: '重试中',
+            pending: '排队中',
+        }[run.status] || run.status;
+
+        let html = `
+        <div class="card run-status-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+                <div>
+                    <strong>Run #${run.id}</strong>
+                    <span class="tag ${statusClass}" style="margin-left:8px;">${statusText}</span>
+                    <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:4px;">共 ${steps.length} 个步骤 · ${run.created_at || ''}</div>
+                </div>
+                ${run.status === 'failed' ? `<button class="btn btn-primary" onclick="retryRun(${run.id})">重新规划</button>` : ''}
+            </div>
+            ${run.error_message ? `<div style="margin-top:10px;color:var(--danger);font-size:0.85rem;">错误：${escapeHtml(run.error_message)}</div>` : ''}
+        </div>`;
+        box.innerHTML = html;
+        box.style.display = 'block';
+
+        // 如果 Run 还在运行，定时刷新
+        if (['running', 'pending', 'retrying'].includes(run.status)) {
+            setTimeout(() => loadRunStatus(runId), 2000);
+        }
+    } catch (e) {
+        console.error('加载 Run 状态失败:', e);
+    }
+}
+
+async function retryRun(runId) {
+    const btn = document.querySelector('#runStatusBox button');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '重试中...';
+    }
+    try {
+        const r = await fetch('/api/v3/runs/' + runId + '/retry', {method: 'POST'});
+        const data = await r.json();
+        if (data.success) {
+            showToast('重试成功，即将刷新', 'success');
+            setTimeout(() => location.reload(), 800);
+        } else {
+            showToast(data.message || '重试失败', 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '重新规划';
+            }
+        }
+    } catch (e) {
+        showToast('重试异常: ' + e.message, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '重新规划';
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadItinerary);
+</script>
+{% endblock %}

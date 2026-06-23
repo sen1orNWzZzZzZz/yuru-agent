@@ -1,0 +1,81 @@
+{% extends "base_v3.html" %}
+
+{% block title %}我的行程历史 - 灵动旅心 V3{% endblock %}
+
+{% block extra_css %}
+<style>
+.history-empty { text-align:center; padding: 60px 20px; color: var(--text-secondary); }
+.history-list { display: flex; flex-direction: column; gap: 16px; }
+.history-card {
+    display: block;
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    text-decoration: none;
+    color: inherit;
+    transition: var(--transition);
+}
+.history-card:hover {
+    box-shadow: var(--shadow-hover);
+    border-color: var(--accent-light);
+}
+.history-title { font-weight: 600; font-size: 1.05rem; margin-bottom: 6px; }
+.history-meta { font-size: 0.85rem; color: var(--text-secondary); }
+.history-tag { font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="plan-header animate-fade-up">
+    <div class="heading-lg">我的行程历史</div>
+    <p>登录状态下规划的行程会自动保存到这里</p>
+</div>
+
+<div id="historyContainer" class="animate-fade-up animate-delay-1">
+    <div class="history-empty">加载中...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadHistory() {
+    const container = document.getElementById('historyContainer');
+    try {
+        const r = await fetch('/api/users/me/plans');
+        const data = await r.json();
+        if (!data.success) {
+            container.innerHTML = `<div class="history-empty">
+                ${data.message === '未登录' ? '请先 <a href="/login">登录</a>' : '加载失败: ' + escapeHtml(data.message)}
+            </div>`;
+            return;
+        }
+        const plans = data.data || [];
+        if (!plans.length) {
+            container.innerHTML = `<div class="history-empty">
+                还没有规划记录，<a href="/plan">去规划一次</a>
+            </div>`;
+            return;
+        }
+        container.innerHTML = '<div class="history-list">' + plans.map(p => `
+            <a class="history-card" href="/result/${p.id}">
+                <div class="history-title">${p.title || p.destination + '之旅'}</div>
+                <div class="history-meta">
+                    ${p.destination} · ${p.traveler_count || 1}人 · ${p.created_at || ''}
+                    <span class="history-tag ${p.llm_used ? 'tag-accent' : 'tag-muted'}">${p.llm_used ? 'LLM 增强' : '模板生成'}</span>
+                </div>
+            </a>
+        `).join('') + '</div>';
+    } catch (e) {
+        container.innerHTML = `<div class="history-empty">加载异常: ${e.message}</div>`;
+    }
+}
+
+function escapeHtml(text) {
+    if (text == null) return '';
+    return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+document.addEventListener('DOMContentLoaded', loadHistory);
+</script>
+{% endblock %}

@@ -2,6 +2,42 @@
 
 {% block title %}智能规划 - 灵动旅心 V3{% endblock %}
 
+{% block extra_css %}
+<style>
+.agent-detail-header { cursor: pointer; }
+.agent-chevron { transition: transform 0.2s; color: var(--text-muted); }
+.agent-chevron.expanded { transform: rotate(180deg); }
+.agent-summary { font-size: 0.8rem; color: var(--text-secondary); margin-top: 8px; line-height: 1.6; }
+.agent-embedded-page { display: none; margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--border); }
+.agent-embedded-title { font-weight: 600; font-size: 0.85rem; margin-bottom: 12px; color: var(--text); }
+.trace-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.trace-item { background: var(--bg-soft); padding: 10px 12px; border-radius: var(--radius-xs); font-size: 0.8rem; }
+.trace-item .trace-value { font-weight: 600; font-size: 1rem; color: var(--text); }
+.trace-item .trace-label { color: var(--text-muted); font-size: 0.7rem; margin-top: 2px; }
+.poi-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.poi-table th, .poi-table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border-light); }
+.poi-table th { color: var(--text-muted); font-weight: 500; }
+.source-tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; }
+.source-local { background: var(--success-soft); color: var(--success); }
+.source-map { background: var(--info-soft); color: var(--info); }
+.agent-list-item { padding: 10px 0; border-bottom: 1px solid var(--border-light); }
+.agent-list-item:last-child { border-bottom: none; }
+.agent-list-item:first-child { padding-top: 0; }
+
+/* Planner 思考链时间轴 */
+.planning-trace-card { margin-bottom: 24px; }
+.trace-timeline { display: flex; flex-direction: column; gap: 14px; }
+.trace-step { display: flex; gap: 12px; align-items: flex-start; }
+.trace-step-icon { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--bg-soft); font-size: 0.9rem; flex-shrink: 0; }
+.trace-step-body { flex: 1; }
+.trace-step-title { font-weight: 600; font-size: 0.85rem; color: var(--text); }
+.trace-step-content { font-size: 0.8rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.6; white-space: pre-wrap; }
+.trace-step.tool_call .trace-step-icon { background: var(--accent-soft); }
+.trace-step.observation .trace-step-icon { background: var(--info-soft); }
+.trace-step.thought .trace-step-icon { background: var(--success-soft); }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="plan-header animate-fade-up">
     <div class="heading-lg">智能旅行规划</div>
@@ -96,6 +132,9 @@
         <div id="agentStatus" class="agent-status-list">
             <!-- 动态显示Agent执行状态 -->
         </div>
+        <div id="planningTrace" class="trace-timeline" style="margin-top:24px;text-align:left;">
+            <!-- 动态显示Planner思考链 -->
+        </div>
     </div>
 </div>
 
@@ -107,13 +146,9 @@ const iconCheck = `<svg class="agent-status-icon" viewBox="0 0 24 24" fill="none
 const iconLoader = `<svg class="agent-status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`;
 const iconWait = `<svg class="agent-status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
 
-const activityIcons = {
-    hotel: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/><path d="M9 16v-6"/><path d="M15 16v-6"/></svg>`,
-    restaurant: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3zm0 0v7"/></svg>`,
-    attraction: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 18l4-8 4 8"/><path d="M12 10V4"/><path d="M4 22h16"/></svg>`,
-    transport: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6 18v2"/><path d="M18 18v2"/><path d="M6 10h12"/></svg>`,
-    activity: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`
-};
+</script>
+<script src="/static/js/result_renderer.js"></script>
+<script>
 
 const agentNames = {
     weather: '天气查询Agent',
@@ -124,6 +159,25 @@ const agentNames = {
     risk: '风控Agent'
 };
 const agentOrder = ['weather', 'hotel', 'restaurant', 'attraction', 'transport', 'risk'];
+
+function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+}
+
+function setActiveRunId(runId) {
+    try { localStorage.setItem('active_plan_run_id', String(runId)); } catch (e) {}
+}
+
+function getActiveRunId() {
+    try { return localStorage.getItem('active_plan_run_id'); } catch (e) { return null; }
+}
+
+function clearActiveRunId() {
+    try { localStorage.removeItem('active_plan_run_id'); } catch (e) {}
+}
 
 async function startPlan(e) {
     e.preventDefault();
@@ -144,14 +198,23 @@ async function startPlan(e) {
     statusDiv.innerHTML = agentOrder.map(key =>
         `<div id="agent-${key}" class="agent-status-item">${iconWait}${agentNames[key]} - 等待执行...</div>`
     ).join('');
+    document.getElementById('planningTrace').innerHTML = '';
 
-    try {
-        const response = await fetch('/api/v3/plan/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
+    const idempotencyKey = generateUUID();
+    subscribeStream(null, data, idempotencyKey);
+    return false;
+}
 
+function subscribeStream(runId, payload, idempotencyKey) {
+    const url = runId
+        ? `/api/v3/plan/stream?run_id=${runId}`
+        : `/api/v3/plan/stream?idempotency_key=${idempotencyKey}`;
+
+    fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    }).then(response => {
         if (!response.ok || !response.body) {
             throw new Error(`HTTP ${response.status}`);
         }
@@ -160,35 +223,85 @@ async function startPlan(e) {
         const decoder = new TextDecoder();
         let buffer = '';
 
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const chunks = buffer.split('\n\n');
-            buffer = chunks.pop();
-            for (const chunk of chunks) {
-                if (!chunk.startsWith('data: ')) continue;
-                const payload = chunk.slice(6);
-                if (payload === '[DONE]') continue;
-                try {
-                    const event = JSON.parse(payload);
-                    handleStreamEvent(event);
-                } catch (err) {
-                    console.error('解析 SSE 事件失败:', err);
+        function read() {
+            reader.read().then(({ value, done }) => {
+                if (done) {
+                    // 正常结束，清理 active run
+                    clearActiveRunId();
+                    return;
                 }
-            }
+                buffer += decoder.decode(value, { stream: true });
+                const chunks = buffer.split('\n\n');
+                buffer = chunks.pop();
+                for (const chunk of chunks) {
+                    if (!chunk.startsWith('data: ')) continue;
+                    const payload = chunk.slice(6);
+                    if (payload === '[DONE]') {
+                        clearActiveRunId();
+                        continue;
+                    }
+                    try {
+                        const event = JSON.parse(payload);
+                        handleStreamEvent(event, payload);
+                    } catch (err) {
+                        console.error('解析 SSE 事件失败:', err);
+                    }
+                }
+                read();
+            }).catch(err => {
+                console.error('SSE 读取失败:', err);
+                // 非完成状态下断开，尝试用 run_id 重连
+                const activeRunId = getActiveRunId();
+                if (activeRunId) {
+                    showToast('连接中断，正在重连...', 'warning');
+                    setTimeout(() => subscribeStream(activeRunId, payload, null), 1500);
+                } else {
+                    showToast('请求失败: ' + err.message, 'error');
+                    document.getElementById('formCard').style.display = 'block';
+                    document.getElementById('loadingSection').style.display = 'none';
+                }
+            });
         }
-    } catch (e) {
+        read();
+    }).catch(e => {
         showToast('请求失败: ' + e.message, 'error');
         document.getElementById('formCard').style.display = 'block';
         document.getElementById('loadingSection').style.display = 'none';
-    }
-
-    return false;
+    });
 }
 
-function handleStreamEvent(event) {
-    if (event.type === 'agent_start') {
+function appendTraceStep(step) {
+    const container = document.getElementById('planningTrace');
+    if (!container) return;
+    const type = step.type || 'thought';
+    const icon = type === 'thought' ? '💡' : type === 'tool_call' ? '🔧' : '📥';
+    const title = type === 'thought'
+        ? '思考'
+        : type === 'tool_call'
+            ? `调用 ${step.tool || ''}`
+            : `观察 ${step.tool || ''}`;
+    let content = step.content || '';
+    if (!content && step.tool_input && Object.keys(step.tool_input).length) {
+        content = '参数：' + JSON.stringify(step.tool_input);
+    }
+    if (!content && step.result) {
+        content = JSON.stringify(step.result);
+    }
+    const html = `
+        <div class="trace-step ${type}">
+            <div class="trace-step-icon">${icon}</div>
+            <div class="trace-step-body">
+                <div class="trace-step-title">${escapeHtml(title)}</div>
+                <div class="trace-step-content">${escapeHtml(content)}</div>
+            </div>
+        </div>`;
+    container.insertAdjacentHTML('beforeend', html);
+}
+
+function handleStreamEvent(event, rawPayload) {
+    if (event.type === 'start' && event.run_id) {
+        setActiveRunId(event.run_id);
+    } else if (event.type === 'agent_start') {
         const el = document.getElementById(`agent-${event.agent}`);
         if (el) {
             el.className = 'agent-status-item running';
@@ -200,201 +313,72 @@ function handleStreamEvent(event) {
             el.className = 'agent-status-item done';
             el.innerHTML = `${iconCheck}${agentNames[event.agent]} - 完成 (${event.duration_ms}ms)`;
         }
+    } else if (event.type === 'planner_thought') {
+        appendTraceStep({type: 'thought', content: event.thought});
+    } else if (event.type === 'planner_tool_call') {
+        appendTraceStep({type: 'tool_call', tool: event.tool});
+        const agentEl = document.getElementById(`agent-${event.tool}`);
+        if (agentEl) {
+            agentEl.className = 'agent-status-item running';
+            agentEl.innerHTML = `${iconLoader}${agentNames[event.tool] || event.tool} - 执行中...`;
+        }
+    } else if (event.type === 'planner_observation') {
+        appendTraceStep({type: 'observation', tool: event.tool, result: event.result});
+        const agentName = event.agent || event.tool;
+        const el = document.getElementById(`agent-${agentName}`);
+        if (el && event.result) {
+            el.className = 'agent-status-item done';
+            el.innerHTML = `${iconCheck}${agentNames[agentName] || agentName} - 完成 (${event.result.duration_ms || 0}ms)`;
+        }
     } else if (event.type === 'itinerary_generating') {
         const statusDiv = document.getElementById('agentStatus');
         statusDiv.innerHTML += `<div class="agent-status-item running">${iconLoader}正在生成结构化行程...</div>`;
     } else if (event.type === 'complete') {
-        renderResult(event.data);
+        clearActiveRunId();
         showToast('行程规划完成');
-        document.getElementById('loadingSection').style.display = 'none';
+        if (event.data && event.data.redirect_url) {
+            location.href = event.data.redirect_url;
+        } else if (event.data && event.data.itinerary_id) {
+            location.href = '/result/' + event.data.itinerary_id;
+        }
     } else if (event.type === 'error') {
+        clearActiveRunId();
         showToast(event.message || '规划失败', 'error');
         document.getElementById('formCard').style.display = 'block';
         document.getElementById('loadingSection').style.display = 'none';
     }
 }
 
-function renderResult(data) {
-    const sec = document.getElementById('resultSection');
-    sec.style.display = 'block';
-
-    const it = data.itinerary || {};
-    const days = it.days || [];
-    const risk = data.risk || {};
-    const agents = data.agent_results || {};
-
-    let html = `
-    <div class="result-header animate-fade-up">
-        <div>
-            <div class="heading-md">${it.title || '行程规划结果'}</div>
-            <div class="text-muted" style="font-size:0.85rem;margin-top:4px;">${data.destination} · ${data.days}天 · ${data.travelers}人</div>
-        </div>
-        <div class="result-meta">
-            <span class="tag ${data.llm_used ? 'tag-accent' : 'tag-muted'}">${data.llm_used ? 'LLM 增强' : '模板生成'}</span>
-            ${data.total_duration_ms ? `<span class="tag tag-muted">${data.total_duration_ms}ms</span>` : ''}
-        </div>
-    </div>
-
-    <div class="card overview-card animate-fade-up animate-delay-1">
-        <div class="card-title">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                <line x1="16" y1="2" x2="16" y2="6"/>
-                <line x1="8" y1="2" x2="8" y2="6"/>
-                <line x1="3" y1="10" x2="21" y2="10"/>
-            </svg>
-            行程概览
-        </div>
-        <div class="overview-grid">
-            <div class="overview-item">
-                <div class="overview-value">${data.destination}</div>
-                <div class="overview-label">目的地</div>
-            </div>
-            <div class="overview-item">
-                <div class="overview-value">${data.days}天</div>
-                <div class="overview-label">行程</div>
-            </div>
-            <div class="overview-item">
-                <div class="overview-value">${data.travelers}人</div>
-                <div class="overview-label">出行</div>
-            </div>
-            <div class="overview-item">
-                <div class="overview-value">${data.budget ? '¥' + data.budget : '-'}</div>
-                <div class="overview-label">预算/人</div>
-            </div>
-        </div>
-        ${it.summary ? `<div class="divider"></div><p style="color:var(--text-secondary);">${it.summary}</p>` : ''}
-        ${it.hotel ? `<div class="mt-2" style="font-size:0.9rem;"><strong style="color:var(--text);">推荐酒店：</strong><span style="color:var(--text-secondary);">${it.hotel}</span></div>` : ''}
-        ${it.transport ? `<div style="font-size:0.9rem;"><strong style="color:var(--text);">交通方案：</strong><span style="color:var(--text-secondary);">${it.transport}</span></div>` : ''}
-    </div>`;
-
-    if (agents.weather_result) {
-        html += renderWeatherCard(agents.weather_result);
+// 页面加载时：如果有未完成的 active run_id，尝试重连
+window.addEventListener('DOMContentLoaded', () => {
+    const activeRunId = getActiveRunId();
+    if (activeRunId) {
+        fetch('/api/v3/runs/' + activeRunId)
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    const run = data.data.run;
+                    if (run.status === 'running' || run.status === 'pending' || run.status === 'retrying') {
+                        document.getElementById('formCard').style.display = 'none';
+                        document.getElementById('loadingSection').style.display = 'block';
+                        document.getElementById('agentStatus').innerHTML = agentOrder.map(key =>
+                            `<div id="agent-${key}" class="agent-status-item">${iconWait}${agentNames[key]} - 等待执行...</div>`
+                        ).join('');
+                        subscribeStream(activeRunId, JSON.parse(run.input_params || '{}'), null);
+                    } else {
+                        clearActiveRunId();
+                    }
+                } else {
+                    clearActiveRunId();
+                }
+            })
+            .catch(() => clearActiveRunId());
     }
+});
 
-    html += `
-    <div class="animate-fade-up animate-delay-2">
-        <div class="heading-sm mb-2">每日行程</div>`;
-
-    days.forEach(day => {
-        html += `
-        <div class="card day-card">
-            <div class="day-header">
-                <div class="day-header-left">
-                    <div class="day-number">${day.day}</div>
-                    <div>
-                        <div class="day-theme">${day.theme || '第' + day.day + '天行程'}</div>
-                        ${day.weather ? `<div class="day-weather">${day.weather}</div>` : ''}
-                    </div>
-                </div>
-            </div>
-            <div class="activity-list">`;
-
-        (day.activities || []).forEach(act => {
-            html += `
-            <div class="activity-item">
-                <div class="activity-icon">${activityIcons[act.type] || activityIcons.activity}</div>
-                <div class="activity-body">
-                    <div class="activity-name">${act.name}</div>
-                    ${act.note ? `<div class="activity-note">${act.note}</div>` : ''}
-                </div>
-                <div class="activity-time">${act.time || ''}</div>
-            </div>`;
-        });
-
-        html += `</div></div>`;
-    });
-
-    html += `</div>`;
-
-    if (risk.data && risk.data.warnings && risk.data.warnings.length > 0) {
-        html += `
-    <div class="card risk-card animate-fade-up animate-delay-2">
-        <div class="card-title">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                <line x1="12" y1="9" x2="12" y2="13"/>
-                <line x1="12" y1="17" x2="12.01" y2="17"/>
-            </svg>
-            出行提醒
-        </div>`;
-        risk.data.warnings.forEach(w => {
-            const tagClass = {high: 'tag-danger', medium: 'tag-warning', low: 'tag-info'}[w.level] || 'tag-warning';
-            html += `
-            <div class="risk-item">
-                <div class="risk-header">
-                    <span class="tag ${tagClass}">${w.type}</span>
-                    <span class="risk-message">${w.message}</span>
-                </div>
-                <div class="risk-suggestion">建议：${w.suggestion}</div>
-            </div>`;
-        });
-        html += `</div>`;
-    }
-
-    html += `
-    <div class="animate-fade-up animate-delay-3">
-        <div class="heading-sm mb-2">Agent 执行详情</div>
-        <div class="agent-grid">`;
-    Object.values(agents).forEach(a => {
-        html += `
-        <div class="agent-detail-card">
-            <div class="agent-detail-header">
-                <div class="agent-detail-name">${a.agent_name}</div>
-                <span class="tag ${a.status === 'completed' ? 'tag-success' : 'tag-danger'}">${a.status === 'completed' ? '完成' : '失败'}</span>
-            </div>
-            <div class="agent-detail-meta">${a.duration_ms || 0}ms · ${a.agent_type}</div>
-            ${a.reasoning ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:8px;line-height:1.6;">${a.reasoning.substring(0, 80)}...</div>` : ''}
-        </div>`;
-    });
-    html += `</div>
-    </div>
-
-    <div class="text-center mt-3 animate-fade-up animate-delay-3">
-        <button class="btn btn-primary" onclick="location.reload()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="23 4 23 10 17 10"/>
-                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-            </svg>
-            重新规划
-        </button>
-    </div>`;
-
-    sec.innerHTML = html;
-}
-
-function renderWeatherCard(weather) {
-    const d = weather.data || {};
-    const current = d.current || {};
-    return `
-    <div class="card weather-card animate-fade-up animate-delay-1">
-        <div class="card-title">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="5"/>
-                <line x1="12" y1="1" x2="12" y2="3"/>
-                <line x1="12" y1="21" x2="12" y2="23"/>
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-                <line x1="1" y1="12" x2="3" y2="12"/>
-                <line x1="21" y1="12" x2="23" y2="12"/>
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-            </svg>
-            目的地天气
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap;">
-            <div>
-                <div style="font-size:2.8rem;font-weight:300;font-family:var(--font-display);">${current.temp || '?'}°C</div>
-                <div style="opacity:0.8;">${current.description || ''}</div>
-            </div>
-            <div style="text-align:right;">
-                <div style="font-size:0.85rem;opacity:0.7;">湿度 ${current.humidity || '?'}%</div>
-                <div style="font-size:0.85rem;opacity:0.7;">风速 ${current.wind_speed || '?'}m/s</div>
-                <div style="font-size:0.85rem;opacity:0.7;margin-top:8px;">${d.clothing_advice || ''}</div>
-                <div style="font-size:0.7rem;opacity:0.5;margin-top:8px;">数据来源：${current.provider || 'mock'}</div>
-            </div>
-        </div>
-    </div>`;
+function escapeHtml(text) {
+    if (text == null) return '';
+    return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 </script>
 {% endblock %}

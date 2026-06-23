@@ -6,9 +6,18 @@ import json
 import logging
 from typing import Any
 
-from app.db.database import get_db_connection, query_one
+from app.db.database import get_db_connection, query_all, query_one
 
 logger = logging.getLogger(__name__)
+
+
+def _mask_key(key: str | None) -> str:
+    """对 API Key 进行脱敏展示：保留前 8 位和后 4 位，中间用 **** 代替。"""
+    if not key:
+        return ""
+    if len(key) <= 12:
+        return "*" * len(key)
+    return f"{key[:8]}****{key[-4:]}"
 
 
 class IntegrationConfig:
@@ -34,6 +43,18 @@ class IntegrationConfig:
             if config:
                 logger.info(f"[Config] LLM配置加载: {config['model_name']} @ {config['base_url']}")
             return config
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_llm_configs() -> list[dict[str, Any]]:
+        """获取所有 LLM 配置列表（API Key 已脱敏）"""
+        conn = get_db_connection()
+        try:
+            configs = query_all(conn, "SELECT * FROM llm_configs ORDER BY id")
+            for c in configs:
+                c["api_key"] = _mask_key(c.get("api_key"))
+            return configs
         finally:
             conn.close()
 
@@ -69,11 +90,20 @@ class IntegrationConfig:
         """
         conn = get_db_connection()
         try:
+            # 优先取激活配置
             config = query_one(
                 conn,
                 """SELECT provider, api_key, base_url, extra_params
                    FROM api_configs WHERE config_type = 'map' AND is_active = 1 LIMIT 1"""
             )
+            # 没有激活配置时，回退到最近更新的有效配置
+            if not config:
+                config = query_one(
+                    conn,
+                    """SELECT provider, api_key, base_url, extra_params
+                       FROM api_configs WHERE config_type = 'map'
+                       ORDER BY updated_at DESC, id DESC LIMIT 1"""
+                )
             if config and config.get("extra_params"):
                 try:
                     config["extra_params"] = json.loads(config["extra_params"])

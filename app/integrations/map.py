@@ -36,12 +36,17 @@ class MapClient:
     支持高德地图/百度地图，POI搜索和地理编码
     """
 
+    DEFAULT_BASE_URLS = {
+        "amap": "https://restapi.amap.com/v3",
+        "baidu": "https://api.map.baidu.com",
+    }
+
     def __init__(self):
-        self.config = IntegrationConfig.get_map_config()
-        self.provider = self.config["provider"] if self.config else None
-        self.api_key = self.config["api_key"] if self.config else None
-        self.base_url = self.config["base_url"] if self.config else None
-        self.extra_params = self.config.get("extra_params", {}) if self.config else {}
+        self.config = IntegrationConfig.get_map_config() or {}
+        self.provider = self.config.get("provider")
+        self.api_key = self.config.get("api_key")
+        self.base_url = self.config.get("base_url") or self.DEFAULT_BASE_URLS.get(self.provider, "")
+        self.extra_params = self.config.get("extra_params", {})
         self.client = httpx.Client(timeout=15)
 
     def _get_cached_poi(self, city: str, keywords: str, poi_type: str) -> list[dict] | None:
@@ -64,7 +69,10 @@ class MapClient:
                     created = row.get("created_at", "")
                     expiry = (datetime.now() - timedelta(days=7)).isoformat()
                     if created and created > expiry:
-                        return json.loads(row["results_json"])
+                        cached = json.loads(row["results_json"])
+                        # 防止旧代码写入的空缓存一直命中
+                        if cached:
+                            return cached
             finally:
                 conn.close()
         except Exception as e:
@@ -93,9 +101,15 @@ class MapClient:
             logger.warning(f"[Map] 写入 POI 缓存失败: {e}")
 
     def is_available(self) -> bool:
-        return self.config is not None and self.api_key is not None
+        if not self.config or not self.api_key:
+            return False
+        # 过滤掉明显是占位符的 Key
+        key = str(self.api_key).strip()
+        if len(key) < 10 or "your-" in key.lower() or "placeholder" in key.lower() or "example" in key.lower():
+            return False
+        return True
 
-    def search_poi(self, city: str, keywords: str, poi_type: str = "", page_size: int = 10) -> list[dict]:
+    def search_poi(self, city: str, keywords: str, poi_type: str = "", page_size: int = 10, raise_on_error: bool = False) -> list[dict]:
         """
         搜索POI（兴趣点）
         Args:
@@ -103,6 +117,7 @@ class MapClient:
             keywords: 搜索关键词
             poi_type: POI类型（如'酒店'、'景点'）
             page_size: 返回数量
+            raise_on_error: 为 True 时外部调用失败抛出异常（用于测试连接）
         Returns:
             [{"name", "address", "location", "type", "tel"}, ...]
         """
@@ -121,10 +136,15 @@ class MapClient:
                 results = self._baidu_search(city, keywords, poi_type, page_size)
             else:
                 return []
-            self._set_cached_poi(city, keywords, poi_type, results)
+            if results:
+                self._set_cached_poi(city, keywords, poi_type, results)
+            else:
+                logger.warning(f"[Map] {self.provider} 搜索返回空结果，不写入缓存: {city}/{keywords}/{poi_type}")
             return results
         except Exception as e:
             logger.error(f"[Map] POI搜索失败: {e}")
+            if raise_on_error:
+                raise
             return []
 
     def geocode(self, address: str, city: str = "") -> dict | None:
@@ -166,9 +186,9 @@ class MapClient:
     def test_connection(self) -> dict[str, Any]:
         """测试地图API连接"""
         if not self.is_available():
-            return {"success": False, "message": "地图API未配置"}
+            return {"success": False, "message": "地图API未配置或Key无效"}
         try:
-            results = self.search_poi("杭州", "西湖", page_size=1)
+            results = self.search_poi("杭州", "西湖", page_size=1, raise_on_error=True)
             if results:
                 return {"success": True, "message": "连接成功", "provider": self.provider, "sample": results[0]}
             return {"success": False, "message": "API返回空结果", "provider": self.provider}
@@ -177,10 +197,51 @@ class MapClient:
 
     # ---- 高德地图实现 ----
     def _amap_search(self, city, keywords, poi_type, page_size):
-        url = f"{self.base_url}/place/text"
-        params = {
+        type_code = AMAP_TYPE_MAP.get(poi_type, "")
+        expected_prefix = {
+            "hotel": "10",
+            "restaurant": "05",
+            "attraction": "11",
+        }.get(poi_type)
+
+        def _parse_results(data: dict) -> list[dict]:
+            results = []
+            for poi in data.get("pois", []):
+                typecode = poi.get("typecode", "")
+                # 如果传了 poi_type，用 typecode 前缀做后过滤，剔除交叉类型
+                if expected_prefix and not str(typecode).startswith(expected_prefix):
+                    continue
+                loc = poi.get("location", "")
+                lng_lat = loc.split(",") if loc else [None, None]
+                results.append({
+                    "name": poi.get("name"),
+                    "address": poi.get("address"),
+                    "location": loc,
+                    "longitude": float(lng_lat[0]) if lng_lat[0] else None,
+                    "latitude": float(lng_lat[1]) if lng_lat[1] else None,
+                    "type": poi.get("type"),
+                    "typecode": typecode,
+                    "tel": poi.get("tel"),
+                    "city": poi.get("cityname"),
+                    "district": poi.get("adname"),
+                    "rating": float(poi.get("biz_ext", {}).get("rating", 0) or 0) or 4.0,
+                    "photos": poi.get("photos", []),
+                })
+            return results
+
+        def _do_search(params: dict) -> list[dict]:
+            logger.info(f"[Map] 高德请求: {self.base_url}/place/text params={params}")
+            resp = self.client.get(f"{self.base_url}/place/text", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("status") != "1":
+                info = data.get("info", "未知错误")
+                logger.warning(f"[Map] 高德搜索失败: {info}")
+                raise Exception(f"AMap API error: {info}")
+            return _parse_results(data)
+
+        base_params = {
             "key": self.api_key,
-            "keywords": keywords,
             "city": city,
             "citylimit": "true",
             "offset": page_size,
@@ -188,37 +249,42 @@ class MapClient:
             "extensions": "all",
             "output": "JSON",
         }
-        type_code = AMAP_TYPE_MAP.get(poi_type, poi_type)
+
+        # 策略1：优先使用 keywords（城市限定）
+        if keywords:
+            params = {**base_params, "keywords": keywords}
+            results = _do_search(params)
+            if results:
+                return results
+
+        # 策略2：keywords 无结果，改用 types（城市限定）
         if type_code:
-            params["types"] = type_code
+            params = {**base_params, "types": type_code}
+            results = _do_search(params)
+            if results:
+                return results
 
-        resp = self.client.get(url, params=params)
-        resp.raise_for_status()
-        data = resp.json()
+        # 策略3：仍无结果，放宽 citylimit 用 keywords 再搜一次
+        if keywords:
+            params = {
+                **base_params,
+                "keywords": keywords,
+                "citylimit": "false",
+            }
+            results = _do_search(params)
+            if results:
+                return results
 
-        if data.get("status") != "1":
-            logger.warning(f"[Map] 高德搜索失败: {data.get('info', '未知错误')}")
-            return []
+        # 策略4：最后尝试不指定城市限制的类型搜索
+        if type_code:
+            params = {
+                **base_params,
+                "types": type_code,
+                "citylimit": "false",
+            }
+            return _do_search(params)
 
-        results = []
-        for poi in data.get("pois", []):
-            loc = poi.get("location", "")
-            lng_lat = loc.split(",") if loc else [None, None]
-            results.append({
-                "name": poi.get("name"),
-                "address": poi.get("address"),
-                "location": loc,
-                "longitude": float(lng_lat[0]) if lng_lat[0] else None,
-                "latitude": float(lng_lat[1]) if lng_lat[1] else None,
-                "type": poi.get("type"),
-                "typecode": poi.get("typecode"),
-                "tel": poi.get("tel"),
-                "city": poi.get("cityname"),
-                "district": poi.get("adname"),
-                "rating": float(poi.get("biz_ext", {}).get("rating", 0) or 0) or 4.0,
-                "photos": poi.get("photos", []),
-            })
-        return results
+        return []
 
     def _amap_geocode(self, address, city):
         url = f"{self.base_url}/geocode/geo"
@@ -268,10 +334,15 @@ class MapClient:
             "output": "json",
             "page_size": page_size,
         }
+        type_label = BAIDU_TYPE_MAP.get(poi_type)
+        if type_label:
+            params["tag"] = type_label
         resp = self.client.get(url, params=params)
         data = resp.json()
         if data.get("status") != 0:
-            return []
+            msg = data.get("message") or data.get("msg") or "未知错误"
+            logger.warning(f"[Map] 百度搜索失败: {msg}")
+            raise Exception(f"Baidu API error: {msg}")
         results = []
         for poi in data.get("results", []):
             results.append({

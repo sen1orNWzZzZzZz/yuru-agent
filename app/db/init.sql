@@ -158,6 +158,8 @@ CREATE TABLE itineraries (
     llm_used BOOLEAN DEFAULT 0,                   -- 是否使用了LLM
     weather_data TEXT,                            -- JSON格式天气数据
     map_data TEXT,                                -- JSON格式地图数据
+    itinerary_json TEXT,                          -- JSON格式完整行程结果
+    planning_trace TEXT,                          -- JSON格式Planner思考链
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -270,6 +272,47 @@ CREATE TABLE request_logs (
 
 CREATE INDEX idx_request_logs_created ON request_logs(created_at);
 CREATE INDEX idx_request_logs_path ON request_logs(path);
+
+-- ============================================================
+-- 规划运行与步骤表（Run 状态机、断点续跑、可视化）
+-- ============================================================
+CREATE TABLE planning_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER REFERENCES users(id),
+    itinerary_id INTEGER REFERENCES itineraries(id),
+    parent_run_id INTEGER REFERENCES planning_runs(id),  -- 重试时关联父 Run
+    status VARCHAR(20) DEFAULT 'pending',     -- 'pending', 'running', 'completed', 'failed', 'retrying'
+    input_params TEXT,                        -- JSON 用户原始请求
+    idempotency_key VARCHAR(64),              -- 幂等键，(user_id, idempotency_key) 唯一
+    current_step INTEGER DEFAULT 0,
+    total_steps INTEGER DEFAULT 0,
+    error_message TEXT,
+    claimed_at TIMESTAMP,                     -- worker 认领时间，用于超时释放
+    claimed_by VARCHAR(100),                  -- worker / 进程标识
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE planning_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES planning_runs(id) ON DELETE CASCADE,
+    step_number INTEGER NOT NULL,
+    step_type VARCHAR(50) NOT NULL,           -- 'thought', 'tool_call', 'observation'
+    tool_name VARCHAR(50),                    -- tool_call / observation 时填写
+    tool_input TEXT,                          -- JSON
+    content TEXT,                             -- thought 内容或错误信息
+    observation_json TEXT,                    -- observation 摘要 JSON（供前端展示）
+    cached_result_json TEXT,                  -- observation 完整结果 JSON（供断点续跑恢复）
+    status VARCHAR(20) DEFAULT 'completed',   -- 'completed', 'failed'
+    duration_ms INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_planning_runs_user ON planning_runs(user_id);
+CREATE INDEX idx_planning_runs_status ON planning_runs(status);
+CREATE INDEX idx_planning_runs_idempotency ON planning_runs(user_id, idempotency_key);
+CREATE INDEX idx_planning_runs_claimed ON planning_runs(claimed_at);
+CREATE INDEX idx_planning_steps_run ON planning_steps(run_id);
 
 -- ============================================================
 -- 索引优化

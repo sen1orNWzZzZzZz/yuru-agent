@@ -2,6 +2,25 @@
 
 {% block title %}系统管理 - 灵动旅心 V3{% endblock %}
 
+{% block extra_css %}
+<style>
+.config-list { margin-top: 24px; border-top: 1px solid var(--border-light); padding-top: 18px; }
+.config-list-title { font-weight: 600; margin-bottom: 12px; color: var(--text-primary); }
+.config-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.config-table th, .config-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-light); vertical-align: middle; }
+.config-table tr:hover { background: var(--bg-soft); }
+.config-row-active { background: var(--success-soft) !important; }
+.config-detail { background: var(--bg-soft); padding: 16px; border-radius: var(--radius-sm); margin: 4px 0 12px; }
+.config-detail-row { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 10px; }
+.config-detail-row div { min-width: 180px; }
+.config-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.badge-inline { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; }
+.badge-active { background: var(--success-soft); color: var(--success); }
+.badge-inactive { background: var(--bg-soft); color: var(--text-muted); border: 1px solid var(--border-light); }
+.font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="admin-header animate-fade-up">
     <div class="heading-lg">系统管理</div>
@@ -142,6 +161,11 @@
             </button>
         </div>
     </form>
+
+    <div class="config-list">
+        <div class="config-list-title">已保存的 LLM 配置</div>
+        <div id="llmConfigList"><div class="text-muted" style="padding:8px 0;">加载中...</div></div>
+    </div>
 </div>
 
 <!-- 天气API配置 -->
@@ -199,6 +223,11 @@
             · <a href="https://dev.qweather.com/" target="_blank">和风天气</a> — 国内 API；<strong>必须在 Base URL 填写你的专属 API Host</strong>（控制台-设置中查看，格式如 https://abcxyz.qweatherapi.com）
         </div>
     </form>
+
+    <div class="config-list">
+        <div class="config-list-title">已保存的天气 API 配置</div>
+        <div id="weatherConfigList"><div class="text-muted" style="padding:8px 0;">加载中...</div></div>
+    </div>
 </div>
 
 <!-- 地图API配置 -->
@@ -252,6 +281,11 @@
             · <a href="https://lbsyun.baidu.com/" target="_blank" style="color:var(--success);">百度地图</a> — 国内替代方案
         </div>
     </form>
+
+    <div class="config-list">
+        <div class="config-list-title">已保存的地图 API 配置</div>
+        <div id="mapConfigList"><div class="text-muted" style="padding:8px 0;">加载中...</div></div>
+    </div>
 </div>
 
 <!-- 可观测性指标 -->
@@ -364,10 +398,33 @@ document.addEventListener('DOMContentLoaded', () => {
     loadStatus();
     loadMetrics();
     loadRequestLogs();
+    loadConfigLists();
 });
 
 let tokenTrendChart = null;
 let agentPieChart = null;
+let editingConfig = null;  // { type, id }
+
+const PROVIDER_LABELS = {
+    amap: '高德地图', baidu: '百度地图',
+    openweathermap: 'OpenWeatherMap', qweather: '和风天气'
+};
+
+async function apiDelete(url) {
+    const r = await fetch(url, { method: 'DELETE' });
+    return r.json();
+}
+
+function setSubmitLabel(type, label) {
+    const formId = type === 'llm' ? 'llmForm' : type + 'Form';
+    const btn = document.querySelector(`#${formId} button[type="submit"]`);
+    const icon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+        <polyline points="17 21 17 13 7 13 7 21"/>
+        <polyline points="7 3 7 8 15 8"/>
+    </svg>`;
+    btn.innerHTML = icon + label;
+}
 
 async function loadStatus() {
     try {
@@ -506,9 +563,22 @@ async function saveLlmConfig(e) {
         max_tokens: parseInt(document.getElementById('llmTokens').value),
         use_llm: document.getElementById('llmUse').checked,
     };
+    if (editingConfig && editingConfig.type === 'llm') body.id = editingConfig.id;
     const r = await apiPost('/api/admin/llm/config', body);
-    showToast(r.success ? 'LLM配置保存成功' : r.message, r.success ? 'success' : 'error');
-    if (r.success) loadStatus();
+    showToast(r.success ? (body.id ? 'LLM配置更新成功' : 'LLM配置保存成功') : r.message, r.success ? 'success' : 'error');
+    if (r.success) {
+        editingConfig = null;
+        setSubmitLabel('llm', '保存');
+        e.target.reset();
+        document.getElementById('llmName').value = 'default';
+        document.getElementById('llmUrl').value = 'https://api.openai.com/v1';
+        document.getElementById('llmModel').value = 'gpt-4o-mini';
+        document.getElementById('llmTemp').value = '0.7';
+        document.getElementById('llmTokens').value = '4096';
+        document.getElementById('llmUse').checked = true;
+        loadStatus();
+        loadConfigLists();
+    }
     return false;
 }
 
@@ -521,9 +591,16 @@ async function saveApiConfig(e, configType) {
         base_url: document.getElementById(configType + 'Url').value || '',
         extra_params: '{}',
     };
+    if (editingConfig && editingConfig.type === configType) body.id = editingConfig.id;
     const r = await apiPost('/api/admin/api/config', body);
-    showToast(r.success ? '配置保存成功' : r.message, r.success ? 'success' : 'error');
-    if (r.success) loadStatus();
+    showToast(r.success ? (body.id ? '配置更新成功' : '配置保存成功') : r.message, r.success ? 'success' : 'error');
+    if (r.success) {
+        editingConfig = null;
+        setSubmitLabel(configType, '保存');
+        e.target.reset();
+        loadStatus();
+        loadConfigLists();
+    }
     return false;
 }
 
@@ -543,6 +620,178 @@ async function testApi(configType) {
     } catch (e) {
         resultDiv.innerHTML = `<div style="padding:18px;border-radius:var(--radius-sm);background:var(--danger-soft);color:var(--danger);">测试异常：${e.message}</div>`;
     }
+}
+
+async function loadConfigLists() {
+    for (const type of ['llm', 'weather', 'map']) {
+        const container = document.getElementById(type + 'ConfigList');
+        if (!container) continue;
+        container.innerHTML = '<div class="text-muted" style="padding:8px 0;">加载中...</div>';
+        try {
+            const r = await apiGet('/api/admin/configs/' + type);
+            if (r.success) renderConfigList(type, r.data, container);
+            else container.innerHTML = '<div class="text-muted">加载失败</div>';
+        } catch (e) {
+            container.innerHTML = '<div class="text-muted">加载失败</div>';
+        }
+    }
+}
+
+function renderConfigList(type, configs, container) {
+    if (!configs || configs.length === 0) {
+        container.innerHTML = '<div class="text-muted" style="padding:8px 0;">暂无配置</div>';
+        return;
+    }
+
+    if (type === 'llm') {
+        container.innerHTML = `
+            <table class="config-table">
+                <thead><tr><th>名称</th><th>模型</th><th>Base URL</th><th>API Key</th><th>状态</th></tr></thead>
+                <tbody>
+                    ${configs.map(c => `
+                        <tr onclick="toggleDetail('llm', ${c.id})" class="${c.is_active ? 'config-row-active' : ''}">
+                            <td>${escapeHtml(c.name)}</td>
+                            <td>${escapeHtml(c.model_name)}</td>
+                            <td class="text-muted">${escapeHtml(c.base_url)}</td>
+                            <td><span class="font-mono text-muted">${escapeHtml(c.api_key)}</span></td>
+                            <td>${c.is_active ? '<span class="badge-inline badge-active">启用中</span>' : '<span class="badge-inline badge-inactive">未启用</span>'}</td>
+                        </tr>
+                        <tr id="detail-llm-${c.id}" style="display:none;">
+                            <td colspan="5">
+                                <div class="config-detail">
+                                    <div class="config-detail-row">
+                                        <div><strong>ID：</strong>${c.id}</div>
+                                        <div><strong>Temperature：</strong>${c.temperature}</div>
+                                        <div><strong>Max Tokens：</strong>${c.max_tokens}</div>
+                                        <div><strong>Timeout：</strong>${c.timeout}s</div>
+                                        <div><strong>使用 LLM：</strong>${c.use_llm ? '是' : '否'}</div>
+                                    </div>
+                                    <div class="config-detail-row">
+                                        <div class="text-muted" style="font-size:0.8rem;">创建：${formatDate(c.created_at)} · 更新：${formatDate(c.updated_at)}</div>
+                                    </div>
+                                    <div class="config-actions">
+                                        ${c.is_active ? '<span class="badge-inline badge-active">当前启用</span>' : `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();activateConfig('llm', ${c.id})">启用</button>`}
+                                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();editConfig('llm', ${c.id})">编辑</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();testApi('llm')">测试连接</button>
+                                        <button class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="event.stopPropagation();deleteConfig('llm', ${c.id})">删除</button>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>`;
+    } else {
+        container.innerHTML = `
+            <table class="config-table">
+                <thead><tr><th>提供商</th><th>Base URL</th><th>API Key</th><th>状态</th></tr></thead>
+                <tbody>
+                    ${configs.map(c => `
+                        <tr onclick="toggleDetail('${type}', ${c.id})" class="${c.is_active ? 'config-row-active' : ''}">
+                            <td>${PROVIDER_LABELS[c.provider] || escapeHtml(c.provider)}</td>
+                            <td class="text-muted">${escapeHtml(c.base_url)}</td>
+                            <td><span class="font-mono text-muted">${escapeHtml(c.api_key)}</span></td>
+                            <td>${c.is_active ? '<span class="badge-inline badge-active">启用中</span>' : '<span class="badge-inline badge-inactive">未启用</span>'}</td>
+                        </tr>
+                        <tr id="detail-${type}-${c.id}" style="display:none;">
+                            <td colspan="4">
+                                <div class="config-detail">
+                                    <div class="config-detail-row">
+                                        <div><strong>ID：</strong>${c.id}</div>
+                                        <div><strong>类型：</strong>${c.config_type}</div>
+                                        <div><strong>Provider：</strong>${escapeHtml(c.provider)}</div>
+                                        ${c.extra_params && Object.keys(c.extra_params).length ? `<div><strong>额外参数：</strong>${escapeHtml(JSON.stringify(c.extra_params))}</div>` : ''}
+                                    </div>
+                                    <div class="config-detail-row">
+                                        <div class="text-muted" style="font-size:0.8rem;">创建：${formatDate(c.created_at)} · 更新：${formatDate(c.updated_at)}</div>
+                                    </div>
+                                    <div class="config-actions">
+                                        ${c.is_active ? '<span class="badge-inline badge-active">当前启用</span>' : `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();activateConfig('${type}', ${c.id})">启用</button>`}
+                                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();editConfig('${type}', ${c.id})">编辑</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();testApi('${type}')">测试连接</button>
+                                        <button class="btn btn-secondary btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="event.stopPropagation();deleteConfig('${type}', ${c.id})">删除</button>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>`;
+    }
+}
+
+function toggleDetail(type, id) {
+    const row = document.getElementById(`detail-${type}-${id}`);
+    if (!row) return;
+    row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+
+async function activateConfig(type, id) {
+    const url = type === 'llm'
+        ? `/api/admin/configs/llm/${id}/activate`
+        : `/api/admin/configs/${type}/${id}/activate`;
+    const r = await apiPost(url, {});
+    showToast(r.message, r.success ? 'success' : 'error');
+    if (r.success) {
+        loadStatus();
+        loadConfigLists();
+    }
+}
+
+async function editConfig(type, id) {
+    const url = type === 'llm'
+        ? `/api/admin/configs/llm/${id}`
+        : `/api/admin/configs/${type}/${id}`;
+    const r = await apiGet(url);
+    if (!r.success) {
+        showToast(r.message, 'error');
+        return;
+    }
+    const c = r.data;
+    if (type === 'llm') {
+        document.getElementById('llmName').value = c.name || 'default';
+        document.getElementById('llmKey').value = c.api_key || '';
+        document.getElementById('llmUrl').value = c.base_url || '';
+        document.getElementById('llmModel').value = c.model_name || '';
+        document.getElementById('llmTemp').value = c.temperature ?? 0.7;
+        document.getElementById('llmTokens').value = c.max_tokens ?? 4096;
+        document.getElementById('llmUse').checked = !!c.use_llm;
+        editingConfig = { type: 'llm', id: c.id };
+        setSubmitLabel('llm', '更新配置');
+        document.getElementById('llmForm').scrollIntoView({ behavior: 'smooth' });
+    } else {
+        document.getElementById(type + 'Provider').value = c.provider || '';
+        document.getElementById(type + 'Key').value = c.api_key || '';
+        document.getElementById(type + 'Url').value = c.base_url || '';
+        editingConfig = { type, id: c.id };
+        setSubmitLabel(type, '更新配置');
+        document.getElementById(type + 'Form').scrollIntoView({ behavior: 'smooth' });
+    }
+}
+
+async function deleteConfig(type, id) {
+    if (!confirm('确定删除该配置？此操作不可恢复。')) return;
+    const url = type === 'llm'
+        ? `/api/admin/configs/llm/${id}`
+        : `/api/admin/configs/${type}/${id}`;
+    const r = await apiDelete(url);
+    showToast(r.message, r.success ? 'success' : 'error');
+    if (r.success) loadConfigLists();
+}
+
+function escapeHtml(text) {
+    if (text == null) return '';
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function formatDate(dt) {
+    if (!dt) return '-';
+    return new Date(dt).toLocaleString();
 }
 </script>
 {% endblock %}

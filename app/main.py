@@ -3,12 +3,16 @@
 PlannerAgent + 子Agent架构
 集成LLM/天气API/地图API，数据库存储Mock数据
 """
+import asyncio
+import logging
 import json
 import os
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+logger = logging.getLogger(__name__)
 
 
 from fastapi import FastAPI, Request
@@ -21,7 +25,9 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Mount
 
+from app.agents.v3.base import AgentResult
 from app.agents.v3.planner import PlannerAgent
+from app.agents.v3.planning_run import PlanningRunService
 from app.auth import (
     get_current_user,
     get_password_hash,
@@ -166,9 +172,98 @@ app.add_middleware(RequestLoggingMiddleware)
 
 @app.on_event("startup")
 async def startup_event():
-    """启动时初始化数据库"""
+    """启动时初始化数据库，并释放上次卡住的任务"""
     init_db()
+    # 服务重启后，把长时间未更新的 running Run 重置为 pending，避免任务永远卡住
+    PlanningRunService.release_stuck_runs()
     # 知识库向量化暂不自动执行，通过 /api/admin/knowledge/ingest 手动触发
+
+
+# ============================================================
+# Planning Run 执行辅助函数
+# ============================================================
+
+def _worker_id() -> str:
+    """生成当前 worker 标识（进程 PID + 线程标识）"""
+    import os
+    import threading
+    return f"pid-{os.getpid()}-thread-{threading.current_thread().ident}"
+
+
+def _build_planning_context(req: PlanRequest, preferences: dict | None) -> dict:
+    """从请求构建 Planner 上下文"""
+    context = {
+        "destination": req.destination,
+        "days": req.days,
+        "travelers": req.travelers,
+        "budget": req.budget,
+        "origin": req.origin,
+        "style": req.style,
+    }
+    if preferences:
+        context.update(preferences)
+    return context
+
+
+def _step_to_sse_event(step: dict) -> dict | None:
+    """把 planning_steps 表记录转成 SSE 事件"""
+    tool_to_agent = {
+        "get_weather": "weather",
+        "search_hotels": "hotel",
+        "search_restaurants": "restaurant",
+        "search_attractions": "attraction",
+        "plan_transport": "transport",
+        "risk_check": "risk",
+    }
+    step_type = step.get("step_type")
+    tool_name = step.get("tool_name") or ""
+    agent_name = tool_to_agent.get(tool_name, tool_name)
+    if step_type == "thought":
+        return {"type": "planner_thought", "step": step.get("step_number"), "thought": step.get("content") or ""}
+    if step_type == "tool_call":
+        return {"type": "planner_tool_call", "step": step.get("step_number"), "tool": tool_name, "tool_input": step.get("tool_input") or {}}
+    if step_type == "observation":
+        result = {}
+        try:
+            result = json.loads(step.get("observation_json") or "{}")
+        except Exception:
+            pass
+        return {
+            "type": "planner_observation",
+            "step": step.get("step_number"),
+            "tool": tool_name,
+            "agent": agent_name,
+            "result": result,
+        }
+    return None
+
+
+def _run_planning_worker(run_id: int, user_id: int | None, context: dict) -> None:
+    """
+    后台 worker：认领并执行一个 PlanningRun。
+    执行完成后把状态写回数据库，前端通过 SSE 轮询或 /api/v3/runs 查看进度。
+    """
+    import time
+    run_service = PlanningRunService()
+    if not run_service.claim_run_for_execution(run_id, _worker_id()):
+        logger.info(f"[Worker] run_id={run_id} 已被其他 worker 认领，跳过")
+        return
+
+    start_time = time.time()
+    planner = PlannerAgent()
+    try:
+        result = planner.plan_stream(context, user_id=user_id, run_id=run_id)
+        total_duration_ms = int((time.time() - start_time) * 1000)
+        result["total_duration_ms"] = total_duration_ms
+        result["destination"] = context.get("destination")
+        result["days"] = context.get("days")
+        result["travelers"] = context.get("travelers")
+        result["budget"] = context.get("budget")
+        result["origin"] = context.get("origin")
+        logger.info(f"[Worker] run_id={run_id} 规划完成，itinerary_id={result.get('itinerary_id')}")
+    except Exception as e:
+        logger.exception(f"[Worker] run_id={run_id} 规划失败")
+        run_service.update_status(run_id, "failed", error_message=str(e))
 
 
 # ============================================================
@@ -203,6 +298,7 @@ class ChecklistRequest(BaseModel):
 
 class LLMConfigRequest(BaseModel):
     """LLM配置请求"""
+    id: int | None = None
     name: str = "default"
     api_key: str
     base_url: str = "https://api.openai.com/v1"
@@ -215,6 +311,7 @@ class LLMConfigRequest(BaseModel):
 
 class APIConfigRequest(BaseModel):
     """外部API配置请求"""
+    id: int | None = None
     config_type: str = Field(..., description="类型: weather/map")
     provider: str = Field(..., description="提供商: openweathermap/qweather/amap/baidu")
     api_key: str
@@ -274,6 +371,12 @@ async def result_page(request: Request, itinerary_id: int):
     })
 
 
+@app.get("/history")
+async def history_page(request: Request):
+    """我的行程历史页"""
+    return templates.TemplateResponse(request, "history.html")
+
+
 @app.get("/admin")
 async def admin_page(request: Request):
     """管理后台"""
@@ -296,11 +399,12 @@ async def login_page(request: Request):
 # API路由 - 核心规划
 # ============================================================
 @app.post("/api/v3/plan")
-async def create_plan(req: PlanRequest, request: Request):
+async def create_plan(req: PlanRequest, request: Request, idempotency_key: str | None = None):
     """
     创建旅行规划 (V3核心API)
     PlannerAgent调度所有子Agent并行执行
     已登录用户会自动合并画像偏好，并在规划完成后更新画像。
+    支持 idempotency_key 幂等创建。
     """
     try:
         user = get_current_user(request)
@@ -311,6 +415,17 @@ async def create_plan(req: PlanRequest, request: Request):
             preferences = merge_profile_with_request(profile, req.model_dump())
             user_id = user["id"]
 
+        context = _build_planning_context(req, preferences)
+        run_service = PlanningRunService()
+        run_id, is_new = run_service.create_run_idempotent(user_id, context, idempotency_key)
+
+        if not is_new:
+            # 幂等命中：如果已有 Run 已完成/失败，直接返回；否则等待执行
+            run = run_service.get_run(run_id)
+            if run.get("status") == "completed" and run.get("itinerary_id"):
+                return {"success": True, "data": {"run_id": run_id, "itinerary_id": run["itinerary_id"]}}
+
+        # 同步执行（当前线程阻塞，适合非流式调用）
         planner = PlannerAgent()
         result = planner.plan(
             destination=req.destination,
@@ -321,6 +436,7 @@ async def create_plan(req: PlanRequest, request: Request):
             style=req.style,
             preferences=preferences,
             user_id=user_id,
+            run_id=run_id,
         )
         return {"success": True, "data": result}
     except Exception as e:
@@ -328,108 +444,123 @@ async def create_plan(req: PlanRequest, request: Request):
 
 
 @app.post("/api/v3/plan/stream")
-async def create_plan_stream(req: PlanRequest, request: Request):
+async def create_plan_stream(
+    req: PlanRequest,
+    request: Request,
+    run_id: int | None = None,
+    idempotency_key: str | None = None,
+):
     """
     流式创建旅行规划 (SSE)
 
-    串行执行 Agent 并实时推送进度事件，前端可通过 ReadableStream 消费。
-    与 POST /api/v3/plan 并行版互为补充：并行版性能更高，流式版体验更好。
+    - 支持 run_id 参数：前端断线重连时可重新订阅已有 Run。
+    - 支持 idempotency_key：重复请求幂等，不重复创建 Run。
+    - Run 创建后由后台 worker 认领执行；SSE 只负责读取 planning_steps 并实时推送。
+    - 服务重启后，卡住的 running Run 会被重置为 pending，重新连接后可继续。
     """
     user = get_current_user(request)
     profile = get_user_profile(user["id"]) if user else None
     preferences = merge_profile_with_request(profile, req.model_dump()) if user else None
     user_id = user["id"] if user else None
 
-    async def event_generator():
-        import time
+    context = _build_planning_context(req, preferences)
+    run_service = PlanningRunService()
 
-        start_time = time.time()
-        planner = PlannerAgent()
-        context = {
-            "destination": req.destination,
-            "days": req.days,
-            "travelers": req.travelers,
-            "budget": req.budget,
-            "origin": req.origin,
-            "style": req.style,
-        }
-        if preferences:
-            context.update(preferences)
-        results = {}
+    if run_id:
+        # 订阅已有 Run，校验存在性
+        run = run_service.get_run(run_id)
+        if not run:
+            return {"success": False, "message": "Run 不存在"}
+    else:
+        run_id, is_new = run_service.create_run_idempotent(user_id, context, idempotency_key)
+
+    run = run_service.get_run(run_id)
+
+    # 如果 Run 还在 pending/retrying，启动后台 worker 认领执行
+    if run and run.get("status") in ("pending", "retrying"):
+        asyncio.create_task(asyncio.to_thread(_run_planning_worker, run_id, user_id, context))
+
+    async def event_generator():
+        import asyncio
 
         def sse_payload(event: dict) -> str:
             return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-        yield sse_payload({"type": "start", "message": "开始规划..."})
+        yield sse_payload({"type": "start", "run_id": run_id, "message": "开始规划..."})
 
-        agent_order = [
-            ("weather", planner.weather_agent),
-            ("hotel", planner.hotel_agent),
-            ("restaurant", planner.restaurant_agent),
-            ("attraction", planner.attraction_agent),
-            ("transport", planner.transport_agent),
-        ]
-        for name, agent in agent_order:
-            yield sse_payload({"type": "agent_start", "agent": name})
-            result = await run_in_threadpool(agent.execute, context)
-            results[f"{name}_result"] = result
-            yield sse_payload({
-                "type": "agent_complete",
-                "agent": name,
-                "status": result.status,
-                "duration_ms": result.duration_ms,
-            })
-
-        # 风控Agent需要前面所有Agent的结果
-        yield sse_payload({"type": "agent_start", "agent": "risk"})
-        risk_result = await run_in_threadpool(
-            planner.risk_agent.execute, {**context, **results}
-        )
-        yield sse_payload({
-            "type": "agent_complete",
-            "agent": "risk",
-            "status": risk_result.status,
-            "duration_ms": risk_result.duration_ms,
-        })
-
-        yield sse_payload({"type": "itinerary_generating"})
-        if planner.use_llm:
-            itinerary = await run_in_threadpool(
-                planner._generate_with_llm, context, results, risk_result
+        last_step_id = 0
+        conn = get_db_connection()
+        try:
+            # 先推送已经执行过的历史步骤（支持断线重连）
+            history_steps = query_all(
+                conn,
+                "SELECT * FROM planning_steps WHERE run_id = ? ORDER BY step_number, id",
+                (run_id,),
             )
-        else:
-            itinerary = await run_in_threadpool(
-                planner._generate_template, context, results, risk_result
-            )
+            for step in history_steps:
+                event = _step_to_sse_event(step)
+                if event:
+                    yield sse_payload(event)
+                last_step_id = step["id"]
+        finally:
+            conn.close()
 
-        total_duration_ms = int((time.time() - start_time) * 1000)
-        itinerary_id = await run_in_threadpool(
-            planner._save_itinerary, context, itinerary, results, user_id
-        )
+        # 轮询新步骤，直到 Run 结束
+        while True:
+            await asyncio.sleep(0.5)
+            run = run_service.get_run(run_id)
+            if not run:
+                yield sse_payload({"type": "error", "message": "Run 不存在"})
+                yield "data: [DONE]\n\n"
+                break
 
-        # 登录用户：异步更新画像
-        if user_id:
-            from app.agents.v3.profile_agent import ProfileSummarizerAgent
-            await run_in_threadpool(
-                ProfileSummarizerAgent().summarize, user_id, context, itinerary
-            )
+            conn = get_db_connection()
+            try:
+                new_steps = query_all(
+                    conn,
+                    "SELECT * FROM planning_steps WHERE run_id = ? AND id > ? ORDER BY id",
+                    (run_id, last_step_id),
+                )
+            finally:
+                conn.close()
 
-        final_data = {
-            "success": True,
-            "itinerary_id": itinerary_id,
-            "destination": req.destination,
-            "days": req.days,
-            "travelers": req.travelers,
-            "budget": req.budget,
-            "origin": req.origin,
-            "llm_used": planner.use_llm,
-            "itinerary": itinerary,
-            "agent_results": {k: v.to_dict() for k, v in results.items()},
-            "risk": risk_result.to_dict(),
-            "total_duration_ms": total_duration_ms,
-        }
-        yield sse_payload({"type": "complete", "data": final_data})
-        yield "data: [DONE]\n\n"
+            for step in new_steps:
+                event = _step_to_sse_event(step)
+                if event:
+                    yield sse_payload(event)
+                last_step_id = step["id"]
+
+            status = run.get("status")
+            # 在 Run 结束前再推送一次剩余步骤，避免 worker 执行过快导致 SSE 漏掉中间步骤
+            if status in ("completed", "failed"):
+                conn = get_db_connection()
+                try:
+                    remaining = query_all(
+                        conn,
+                        "SELECT * FROM planning_steps WHERE run_id = ? AND id > ? ORDER BY id",
+                        (run_id, last_step_id),
+                    )
+                    for step in remaining:
+                        event = _step_to_sse_event(step)
+                        if event:
+                            yield sse_payload(event)
+                        last_step_id = step["id"]
+                finally:
+                    conn.close()
+
+            if status == "completed":
+                itinerary_id = run.get("itinerary_id")
+                result = {"run_id": run_id, "itinerary_id": itinerary_id}
+                if itinerary_id:
+                    result["redirect_url"] = f"/result/{itinerary_id}"
+                yield sse_payload({"type": "itinerary_generating"})
+                yield sse_payload({"type": "complete", "data": result})
+                yield "data: [DONE]\n\n"
+                break
+            if status == "failed":
+                yield sse_payload({"type": "error", "message": run.get("error_message") or "规划失败"})
+                yield "data: [DONE]\n\n"
+                break
 
     return StreamingResponse(
         event_generator(),
@@ -440,19 +571,129 @@ async def create_plan_stream(req: PlanRequest, request: Request):
 
 @app.get("/api/v3/plan/{itinerary_id}")
 async def get_plan(itinerary_id: int):
-    """获取行程详情"""
+    """获取行程详情（含完整行程 JSON 与 Agent 执行记录）"""
     conn = get_db_connection()
     try:
-        itinerary = query_one(conn, "SELECT * FROM itineraries WHERE id = ?", (itinerary_id,))
-        if not itinerary:
+        itinerary_row = query_one(conn, "SELECT * FROM itineraries WHERE id = ?", (itinerary_id,))
+        if not itinerary_row:
             return {"success": False, "message": "行程不存在"}
 
         logs = query_all(conn,
             "SELECT * FROM agent_logs WHERE itinerary_id = ? ORDER BY id", (itinerary_id,))
 
-        return {"success": True, "data": {"itinerary": itinerary, "logs": logs}}
+        # 解析保存的完整行程 JSON
+        itinerary_json = itinerary_row.get("itinerary_json") or "{}"
+        try:
+            plan = json.loads(itinerary_json)
+        except json.JSONDecodeError:
+            plan = {}
+
+        # 解析 Planner 思考链
+        planning_trace_raw = itinerary_row.get("planning_trace") or "[]"
+        try:
+            planning_trace = json.loads(planning_trace_raw)
+        except json.JSONDecodeError:
+            planning_trace = []
+
+        # 从 agent_logs 重建 agent_results 与 risk（用于结果页可视化）
+        agent_results = {}
+        risk_result = {"data": {"warnings": []}, "status": "completed"}
+        for log in logs:
+            agent_type = log.get("agent_type", "")
+            key = f"{agent_type}_result"
+            try:
+                output_data = json.loads(log.get("output_result") or "{}")
+            except Exception:
+                output_data = {"raw": log.get("output_result", "")}
+            result_obj = {
+                "agent_type": agent_type,
+                "agent_name": log.get("agent_name", ""),
+                "status": log.get("status", "completed"),
+                "duration_ms": log.get("duration_ms", 0),
+                "error": log.get("error_message", ""),
+                "data": output_data,
+                "reasoning": "",
+            }
+            if agent_type == "risk":
+                risk_result = result_obj
+            else:
+                agent_results[key] = result_obj
+
+        return {
+            "success": True,
+            "data": {
+                "itinerary_id": itinerary_row["id"],
+                "run_id": (query_one(
+                    conn,
+                    "SELECT id FROM planning_runs WHERE itinerary_id = ? ORDER BY id DESC LIMIT 1",
+                    (itinerary_id,),
+                ) or {}).get("id"),
+                "destination": itinerary_row["destination"],
+                "origin": itinerary_row["origin"],
+                "days": (plan.get("days") or [{}]).__len__(),
+                "travelers": itinerary_row.get("traveler_count", 2),
+                "budget": itinerary_row.get("budget"),
+                "llm_used": itinerary_row.get("llm_used", False),
+                "total_duration_ms": 0,
+                "itinerary": itinerary_row,
+                "plan": plan,
+                "planning_trace": planning_trace,
+                "agent_results": agent_results,
+                "risk": risk_result,
+            },
+        }
     finally:
         conn.close()
+
+
+@app.get("/api/v3/runs/{run_id}")
+async def get_planning_run(run_id: int):
+    """获取 PlanningRun 详情与所有步骤"""
+    run = PlanningRunService.get_run(run_id)
+    if not run:
+        return {"success": False, "message": "Run 不存在"}
+    steps = PlanningRunService.get_steps(run_id)
+    return {"success": True, "data": {"run": run, "steps": steps}}
+
+
+@app.post("/api/v3/runs/{run_id}/retry")
+async def retry_planning_run(run_id: int):
+    """
+    重试失败的 PlanningRun（断点续跑）。
+    - 恢复之前已完成的 observation 结果，跳过成功步骤。
+    - 只重新执行失败的步骤及其依赖。
+    - 成功后把新的 itinerary_id 写回原 Run。
+    """
+    run_service = PlanningRunService()
+    info = run_service.prepare_retry(run_id)
+    if not info:
+        return {"success": False, "message": "Run 不存在"}
+
+    # 恢复已完成的中间结果，用于断点续跑
+    initial_results = info.get("initial_results", {})
+
+    try:
+        planner = PlannerAgent()
+        params = info["input_params"]
+        context = {
+            "destination": params.get("destination", ""),
+            "days": params.get("days", 3),
+            "travelers": params.get("travelers", 2),
+            "budget": params.get("budget"),
+            "origin": params.get("origin", "上海"),
+            "style": params.get("style", "balanced"),
+        }
+        # 同步执行重试（也会实时写入 planning_steps）
+        result = planner.plan_stream(
+            context,
+            user_id=info.get("user_id"),
+            run_id=run_id,
+            initial_results=initial_results,
+        )
+        return {"success": True, "data": result}
+    except Exception as e:
+        run_service.update_status(run_id, "failed", error_message=str(e))
+        return {"success": False, "message": f"重试失败: {str(e)}"}
 
 
 @app.get("/api/v3/plans")
@@ -582,30 +823,170 @@ async def update_my_profile(req: UserProfileRequest, request: Request):
         conn.close()
 
 
+@app.get("/api/users/me/plans")
+async def get_my_plans(request: Request, limit: int = 50):
+    """获取当前登录用户的规划历史"""
+    user = get_current_user(request)
+    if not user:
+        return {"success": False, "message": "未登录"}
+    conn = get_db_connection()
+    try:
+        plans = query_all(
+            conn,
+            """SELECT id, title, destination, origin, start_date, end_date,
+                      traveler_count, budget, travel_style, status, llm_used,
+                      created_at, updated_at
+               FROM itineraries
+               WHERE user_id = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (user["id"], limit),
+        )
+        return {"success": True, "data": plans, "total": len(plans)}
+    finally:
+        conn.close()
+
+
 # ============================================================
 # API路由 - 配置管理
 # ============================================================
 @app.get("/api/admin/configs")
 async def get_all_configs():
-    """获取所有API配置"""
+    """获取所有API配置（分类列表，含启用状态）"""
     return {
         "success": True,
         "data": {
-            "llm": IntegrationConfig.get_all_api_configs(),
+            "llm": IntegrationConfig.get_llm_configs(),
             "weather": IntegrationConfig.get_all_api_configs("weather"),
             "map": IntegrationConfig.get_all_api_configs("map"),
         }
     }
 
 
-@app.post("/api/admin/llm/config")
-async def save_llm_config(req: LLMConfigRequest):
-    """保存LLM配置"""
+@app.get("/api/admin/configs/llm")
+async def list_llm_configs():
+    """LLM 配置列表"""
+    return {"success": True, "data": IntegrationConfig.get_llm_configs()}
+
+
+@app.get("/api/admin/configs/weather")
+async def list_weather_configs():
+    """天气 API 配置列表"""
+    return {"success": True, "data": IntegrationConfig.get_all_api_configs("weather")}
+
+
+@app.get("/api/admin/configs/map")
+async def list_map_configs():
+    """地图 API 配置列表"""
+    return {"success": True, "data": IntegrationConfig.get_all_api_configs("map")}
+
+
+@app.get("/api/admin/configs/llm/{config_id}")
+async def get_llm_config_detail(config_id: int):
+    """获取单个 LLM 配置详情（含完整 API Key，用于编辑）"""
     conn = get_db_connection()
     try:
-        # 取消其他激活配置
+        config = query_one(conn, "SELECT * FROM llm_configs WHERE id = ?", (config_id,))
+        if not config:
+            return {"success": False, "message": "配置不存在"}
+        return {"success": True, "data": config}
+    finally:
+        conn.close()
+
+
+@app.get("/api/admin/configs/{config_type}/{config_id}")
+async def get_api_config_detail(config_type: str, config_id: int):
+    """获取单个天气/地图配置详情（含完整 API Key，用于编辑）"""
+    if config_type not in {"weather", "map"}:
+        return {"success": False, "message": "无效的配置类型"}
+    conn = get_db_connection()
+    try:
+        config = query_one(conn, """
+            SELECT * FROM api_configs WHERE id = ? AND config_type = ?
+        """, (config_id, config_type))
+        if not config:
+            return {"success": False, "message": "配置不存在"}
+        if config.get("extra_params"):
+            try:
+                config["extra_params"] = json.loads(config["extra_params"])
+            except json.JSONDecodeError:
+                config["extra_params"] = {}
+        return {"success": True, "data": config}
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/configs/llm/{config_id}/activate")
+async def activate_llm_config(config_id: int):
+    """启用指定 LLM 配置"""
+    conn = get_db_connection()
+    try:
         execute(conn, "UPDATE llm_configs SET is_active = 0")
-        # 插入新配置
+        execute(conn, "UPDATE llm_configs SET is_active = 1 WHERE id = ?", (config_id,))
+        return {"success": True, "message": "已启用"}
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/configs/{config_type}/{config_id}/activate")
+async def activate_api_config(config_type: str, config_id: int):
+    """启用指定天气/地图配置"""
+    if config_type not in {"weather", "map"}:
+        return {"success": False, "message": "无效的配置类型"}
+    conn = get_db_connection()
+    try:
+        execute(conn, "UPDATE api_configs SET is_active = 0 WHERE config_type = ?", (config_type,))
+        execute(conn, """
+            UPDATE api_configs SET is_active = 1 WHERE id = ? AND config_type = ?
+        """, (config_id, config_type))
+        return {"success": True, "message": "已启用"}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/admin/configs/llm/{config_id}")
+async def delete_llm_config_v2(config_id: int):
+    """删除 LLM 配置"""
+    conn = get_db_connection()
+    try:
+        execute(conn, "DELETE FROM llm_configs WHERE id = ?", (config_id,))
+        return {"success": True, "message": "已删除"}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/admin/configs/{config_type}/{config_id}")
+async def delete_api_config(config_type: str, config_id: int):
+    """删除天气/地图配置"""
+    if config_type not in {"weather", "map"}:
+        return {"success": False, "message": "无效的配置类型"}
+    conn = get_db_connection()
+    try:
+        execute(conn, "DELETE FROM api_configs WHERE id = ? AND config_type = ?", (config_id, config_type))
+        return {"success": True, "message": "已删除"}
+    finally:
+        conn.close()
+
+
+@app.post("/api/admin/llm/config")
+async def save_llm_config(req: LLMConfigRequest):
+    """保存或更新 LLM 配置"""
+    conn = get_db_connection()
+    try:
+        if req.id:
+            # 更新现有配置，不改变激活状态
+            execute(conn, """
+                UPDATE llm_configs SET
+                    name = ?, api_key = ?, base_url = ?, model_name = ?,
+                    temperature = ?, max_tokens = ?, timeout = ?, use_llm = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (req.name, req.api_key, req.base_url, req.model_name,
+                  req.temperature, req.max_tokens, req.timeout, req.use_llm, req.id))
+            return {"success": True, "data": {"id": req.id}, "message": "LLM配置更新成功"}
+
+        # 新增配置：取消其他激活配置，插入并激活
+        execute(conn, "UPDATE llm_configs SET is_active = 0")
         config_id = execute(conn, """
             INSERT INTO llm_configs (name, api_key, base_url, model_name, temperature,
                 max_tokens, timeout, is_active, use_llm)
@@ -632,12 +1013,13 @@ async def delete_llm_config(config_id: int):
 
 @app.post("/api/admin/api/config")
 async def save_api_config(req: APIConfigRequest):
-    """保存天气/地图API配置"""
+    """保存或更新天气/地图API配置"""
     success = IntegrationConfig.save_api_config(
-        req.config_type, req.provider, req.api_key, req.base_url, req.extra_params
+        req.config_type, req.provider, req.api_key, req.base_url, req.extra_params, req.id
     )
     if success:
-        return {"success": True, "message": f"{req.config_type}配置保存成功"}
+        action = "更新" if req.id else "保存"
+        return {"success": True, "message": f"{req.config_type}配置{action}成功"}
     return {"success": False, "message": "保存失败"}
 
 
