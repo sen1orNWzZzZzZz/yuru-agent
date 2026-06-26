@@ -47,6 +47,9 @@ def load_markdown_documents(doc_dir: str | None = None) -> list[dict]:
 
     docs = []
     for path in sorted(doc_dir.glob("*.md")):
+        # 以下划线开头的文件视为模板/说明，不参与向量化
+        if path.name.startswith("_"):
+            continue
         content = path.read_text(encoding="utf-8")
         metadata, body = _parse_frontmatter(content)
         metadata["source"] = path.name
@@ -96,6 +99,14 @@ def ingest_documents(doc_dir: str | None = None, force: bool = False) -> int:
         metadatas=[d["metadata"] for d in docs],
     )
     return store.count()
+
+
+def load_knowledge_template() -> str:
+    """加载 RAG 文档模板内容，供管理员参考."""
+    template_path = DEFAULT_DOC_DIR / "_template.md"
+    if not template_path.exists():
+        return ""
+    return template_path.read_text(encoding="utf-8")
 
 
 def ensure_ingested() -> None:

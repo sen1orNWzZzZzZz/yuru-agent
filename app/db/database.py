@@ -1,12 +1,14 @@
 """
 数据库管理模块 - SQLite连接和初始化
 """
+import os
 import sqlite3
 from pathlib import Path
 
-# 数据库文件路径
+# 数据库文件路径：可通过环境变量覆盖，便于 Docker 持久化
 DB_DIR = Path(__file__).parent
-DB_PATH = DB_DIR / "travel_v3.db"
+DEFAULT_DB_PATH = DB_DIR / "travel_v3.db"
+DB_PATH = Path(os.environ.get("SQLITE_DB_PATH", DEFAULT_DB_PATH))
 INIT_SQL = DB_DIR / "init.sql"
 SEED_SQL = DB_DIR / "seed.sql"
 

@@ -6,7 +6,7 @@
 import importlib.util
 
 from app.knowledge.checklist_generator import ChecklistGenerator
-from app.knowledge.ingest import ensure_ingested, ingest_documents
+from app.knowledge.ingest import ensure_ingested, ingest_documents, load_knowledge_template
 from app.knowledge.retriever import TipsRetriever
 
 # RAG 为可选能力：chromadb + sentence-transformers 未安装时也能启动项目
@@ -20,5 +20,6 @@ __all__ = [
     "TipsRetriever",
     "ingest_documents",
     "ensure_ingested",
+    "load_knowledge_template",
     "RAG_AVAILABLE",
 ]

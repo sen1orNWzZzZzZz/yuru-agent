@@ -1,12 +1,14 @@
 """ChromaDB 向量存储封装."""
 
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# 向量库持久化目录
+# 向量库持久化目录：可通过环境变量覆盖，便于 Docker 持久化
 DEFAULT_PERSIST_DIR = Path(__file__).parent / "chroma_db"
+PERSIST_DIR = Path(os.environ.get("CHROMA_PERSIST_DIR", DEFAULT_PERSIST_DIR))
 
 
 class KnowledgeVectorStore:
@@ -22,7 +24,7 @@ class KnowledgeVectorStore:
 
         from app.knowledge.embedder import LocalEmbedder
 
-        self.persist_dir = str(persist_dir or DEFAULT_PERSIST_DIR)
+        self.persist_dir = str(persist_dir or PERSIST_DIR)
         self.client = chromadb.PersistentClient(path=self.persist_dir)
         self.collection = self.client.get_or_create_collection(
             name=collection_name,

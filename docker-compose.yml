@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  travel-agent:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # 将 SQLite 和 ChromaDB 持久化到挂载的 data 目录
+      - SQLITE_DB_PATH=/app/data/travel_v3.db
+      - CHROMA_PERSIST_DIR=/app/data/chroma_db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

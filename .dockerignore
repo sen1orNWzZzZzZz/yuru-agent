@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.eggs
+.pytest_cache
+.mypy_cache
+
+# Virtual environments
+venv
+.env
+.venv
+env/
+
+# IDE
+.vscode
+.idea
+
+# Local data (will be mounted as volume)
+data/
+app/db/travel_v3.db
+app/knowledge/chroma_db/
+
+# Temp files
+*.log
+*.tmp
+PY
+check_plan.json
+*.json
+
+# OS
+.DS_Store
+Thumbs.db

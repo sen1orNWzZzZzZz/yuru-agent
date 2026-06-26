@@ -163,6 +163,26 @@ pip install -r requirements.txt
 python run.py
 ```
 
+### 4.4 使用 Docker 启动（推荐）
+
+```bash
+cd python-travel-agent
+
+# 构建并启动（首次会自动下载模型，可能需要几分钟）
+docker-compose up --build -d
+
+# 查看日志
+docker-compose logs -f
+
+# 停止
+docker-compose down
+```
+
+说明：
+- SQLite 数据库和 ChromaDB 向量库会持久化到 `./data/` 目录。
+- 首次启动后会自动初始化数据库并导入 RAG 知识库（若已安装 RAG 依赖）。
+- 管理后台 http://localhost:8000/admin 中可查看知识库状态、重新导入或查看文档模板。
+
 服务启动后访问：
 - 首页: http://localhost:8000/
 - 规划页面: http://localhost:8000/plan

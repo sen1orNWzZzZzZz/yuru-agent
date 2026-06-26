@@ -48,6 +48,14 @@ app/knowledge/chroma_db/
 # sentence-transformers downloaded models
 models/
 
+# Docker runtime data（保留目录，忽略内容）
+data/*
+!data/.gitkeep
+
+# Temp files
+PY
+check_plan.json
+
 # Logs
 *.log
 

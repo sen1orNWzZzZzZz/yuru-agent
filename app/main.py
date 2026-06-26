@@ -47,6 +47,7 @@ from app.knowledge import (
     RAG_AVAILABLE,
     TipsRetriever,
     ensure_ingested,
+    load_knowledge_template,
 )
 from app.mcp_server import MCPMessagesRoute, handle_mcp_sse
 
@@ -1499,6 +1500,19 @@ async def knowledge_status():
     except Exception as e:
         logger.exception("[Admin] 获取知识库状态失败")
         return {"success": False, "message": f"获取状态失败: {str(e)}"}
+
+
+@app.get("/api/admin/knowledge/template")
+async def get_knowledge_template():
+    """获取 RAG 文档模板，供管理员参考格式."""
+    try:
+        template = load_knowledge_template()
+        if not template:
+            return {"success": False, "message": "模板文件不存在"}
+        return {"success": True, "data": template}
+    except Exception as e:
+        logger.exception("[Admin] 读取知识库模板失败")
+        return {"success": False, "message": f"读取模板失败: {str(e)}"}
 
 
 @app.post("/api/v3/checklist")
