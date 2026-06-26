@@ -42,7 +42,12 @@ from app.auth import (
 )
 from app.db.database import execute, get_db_connection, init_db, query_all, query_one
 from app.integrations.config_manager import IntegrationConfig
-from app.knowledge import ensure_ingested
+from app.knowledge import (
+    ChecklistGenerator,
+    RAG_AVAILABLE,
+    TipsRetriever,
+    ensure_ingested,
+)
 from app.mcp_server import MCPMessagesRoute, handle_mcp_sse
 
 # ============================================================
@@ -176,7 +181,14 @@ async def startup_event():
     init_db()
     # 服务重启后，把长时间未更新的 running Run 重置为 pending，避免任务永远卡住
     PlanningRunService.release_stuck_runs()
-    # 知识库向量化暂不自动执行，通过 /api/admin/knowledge/ingest 手动触发
+    # 若 RAG 依赖已安装，自动确保知识库已导入（首次启动时建库）
+    if RAG_AVAILABLE:
+        try:
+            ensure_ingested()
+        except Exception as e:
+            logger.warning(f"[Startup] 知识库自动导入失败: {e}")
+    else:
+        logger.info("[Startup] RAG 依赖未安装，跳过知识库初始化")
 
 
 # ============================================================
@@ -1461,16 +1473,92 @@ async def dashboard_agent_logs(range: str = "24h", limit: int = 50, offset: int 
 
 
 @app.post("/api/admin/knowledge/ingest")
-async def ingest_knowledge():
+async def ingest_knowledge(force: bool = False):
     """手动触发旅行知识库向量化（首次启动或文档更新后调用）."""
+    if not RAG_AVAILABLE:
+        return {"success": False, "message": "RAG 依赖未安装，请先执行 pip install -r requirements.txt"}
     try:
-        count = ensure_ingested()
+        count = ensure_ingested() if not force else ingest_documents(force=True)
         return {"success": True, "message": f"知识库导入完成，共 {count} 篇文档"}
     except Exception as e:
+        logger.exception("[Admin] 知识库导入失败")
         return {"success": False, "message": f"导入失败: {str(e)}"}
 
 
-@app.get("/api/admin/request-logs")
+@app.get("/api/admin/knowledge/status")
+async def knowledge_status():
+    """查看旅行知识库状态."""
+    if not RAG_AVAILABLE:
+        return {"success": True, "enabled": False, "count": 0, "message": "RAG 依赖未安装"}
+    try:
+        from app.knowledge.vector_store import KnowledgeVectorStore
+
+        store = KnowledgeVectorStore()
+        count = store.count()
+        return {"success": True, "enabled": True, "count": count}
+    except Exception as e:
+        logger.exception("[Admin] 获取知识库状态失败")
+        return {"success": False, "message": f"获取状态失败: {str(e)}"}
+
+
+@app.post("/api/v3/checklist")
+async def generate_checklist(req: ChecklistRequest):
+    """基于 RAG 生成旅行 Checklist."""
+    if not RAG_AVAILABLE:
+        return {"success": False, "message": "RAG 依赖未安装"}
+    try:
+        generator = ChecklistGenerator()
+        result = generator.generate(
+            destination=req.destination,
+            days=req.days,
+            travelers=req.travelers,
+            season=req.season,
+            special_needs=req.special_needs,
+            style=req.style,
+        )
+        return {"success": True, "data": result}
+    except Exception as e:
+        logger.exception("[API] 生成 Checklist 失败")
+        return {"success": False, "message": f"生成失败: {str(e)}"}
+
+
+@app.get("/api/v3/knowledge/tips")
+async def get_travel_tips(
+    destination: str,
+    season: str | None = None,
+    special_needs: str | None = None,
+    style: str | None = None,
+    n_results: int = 5,
+):
+    """语义检索旅行知识 Tips."""
+    if not RAG_AVAILABLE:
+        return {"success": False, "message": "RAG 依赖未安装"}
+    try:
+        query_parts = [f"{destination}旅行"]
+        if season:
+            query_parts.append(f"{season}出行")
+        if special_needs:
+            query_parts.append(special_needs)
+        if style:
+            query_parts.append(f"{style}旅行")
+
+        retriever = TipsRetriever()
+        results = retriever.retrieve(
+            query=" ".join(query_parts),
+            n_results=n_results,
+        )
+        # 扁平化返回，便于前端直接渲染
+        documents = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
+        tips = [
+            {"text": doc, "metadata": meta}
+            for doc, meta in zip(documents, metadatas)
+            if doc
+        ]
+        return {"success": True, "data": {"query": " ".join(query_parts), "tips": tips}}
+    except Exception as e:
+        logger.exception("[API] 检索旅行知识失败")
+        return {"success": False, "message": f"检索失败: {str(e)}"}
 async def get_request_logs(limit: int = 100, offset: int = 0, path: str | None = None):
     """
     获取 API 请求日志

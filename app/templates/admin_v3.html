@@ -98,6 +98,43 @@
     </div>
 </div>
 
+<!-- RAG 知识库 -->
+<div class="card config-card animate-fade-up animate-delay-2">
+    <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="9" ry="3"/>
+            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+        </svg>
+        RAG 旅行知识库
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;">
+        <div>
+            <div id="ragStatus" class="status-badge status-warn">
+                <span class="status-dot"></span>加载中...
+            </div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:6px;">
+                已向量化文档：<span id="ragDocCount">-</span> 篇
+            </div>
+        </div>
+        <div style="display:flex;gap:8px;">
+            <button class="btn btn-secondary" onclick="loadKnowledgeStatus()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 4 23 10 17 10"/>
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                </svg>
+                刷新状态
+            </button>
+            <button class="btn btn-primary" onclick="reingestKnowledge()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
+                </svg>
+                重新导入
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- LLM配置 -->
 <div class="card config-card animate-fade-up animate-delay-2">
     <div class="card-title">
@@ -396,6 +433,7 @@
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     loadStatus();
+    loadKnowledgeStatus();
     loadMetrics();
     loadRequestLogs();
     loadConfigLists();
@@ -440,6 +478,58 @@ async function loadStatus() {
             document.getElementById('dbXhs').textContent = d.database.xiaohongshu;
         }
     } catch (e) { console.error('加载状态失败:', e); }
+}
+
+async function loadKnowledgeStatus() {
+    const statusEl = document.getElementById('ragStatus');
+    const countEl = document.getElementById('ragDocCount');
+    try {
+        const r = await apiGet('/api/admin/knowledge/status');
+        if (!r.success) {
+            statusEl.className = 'status-badge status-err';
+            statusEl.innerHTML = '<span class="status-dot"></span>获取失败';
+            countEl.textContent = '-';
+            return;
+        }
+        if (!r.enabled) {
+            statusEl.className = 'status-badge status-err';
+            statusEl.innerHTML = '<span class="status-dot"></span>未启用';
+            countEl.textContent = '0';
+            return;
+        }
+        statusEl.className = 'status-badge status-ok';
+        statusEl.innerHTML = '<span class="status-dot"></span>已就绪';
+        countEl.textContent = r.count ?? 0;
+    } catch (e) {
+        console.error('加载知识库状态失败:', e);
+        statusEl.className = 'status-badge status-err';
+        statusEl.innerHTML = '<span class="status-dot"></span>加载失败';
+        countEl.textContent = '-';
+    }
+}
+
+async function reingestKnowledge() {
+    const btn = document.querySelector('#ragStatus')?.closest('.card')?.querySelector('button:last-of-type');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '导入中...';
+    }
+    try {
+        const r = await apiPost('/api/admin/knowledge/ingest?force=true', {});
+        showToast(r.message, r.success ? 'success' : 'error');
+        if (r.success) loadKnowledgeStatus();
+    } catch (e) {
+        showToast('导入请求异常: ' + e.message, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
+                </svg>
+                重新导入`;
+        }
+    }
 }
 
 async function loadMetrics() {
