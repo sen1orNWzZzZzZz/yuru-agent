@@ -100,6 +100,8 @@ def migrate_db():
             cursor.execute("ALTER TABLE agent_logs ADD COLUMN estimated_prompt_tokens INTEGER DEFAULT 0")
         if "estimated_completion_tokens" not in columns:
             cursor.execute("ALTER TABLE agent_logs ADD COLUMN estimated_completion_tokens INTEGER DEFAULT 0")
+        if "trace_id" not in columns:
+            cursor.execute("ALTER TABLE agent_logs ADD COLUMN trace_id VARCHAR(32)")
 
         user_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(users)").fetchall()}
         if "password_hash" not in user_columns:
@@ -110,6 +112,8 @@ def migrate_db():
             cursor.execute("ALTER TABLE itineraries ADD COLUMN itinerary_json TEXT")
         if "planning_trace" not in itinerary_columns:
             cursor.execute("ALTER TABLE itineraries ADD COLUMN planning_trace TEXT")
+        if "trace_id" not in itinerary_columns:
+            cursor.execute("ALTER TABLE itineraries ADD COLUMN trace_id VARCHAR(32)")
 
         cursor.execute(
             """
@@ -164,10 +168,14 @@ def migrate_db():
                 duration_ms REAL,
                 client_ip TEXT,
                 user_agent TEXT,
-                error_message TEXT
+                error_message TEXT,
+                trace_id VARCHAR(32)
             )
             """
         )
+        request_logs_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(request_logs)").fetchall()}
+        if "trace_id" not in request_logs_columns:
+            cursor.execute("ALTER TABLE request_logs ADD COLUMN trace_id VARCHAR(32)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_path ON request_logs(path)")
 
@@ -186,6 +194,7 @@ def migrate_db():
                 error_message TEXT,
                 claimed_at TIMESTAMP,
                 claimed_by VARCHAR(100),
+                trace_id VARCHAR(32),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -205,6 +214,7 @@ def migrate_db():
                 cached_result_json TEXT,
                 status VARCHAR(20) DEFAULT 'completed',
                 duration_ms INTEGER DEFAULT 0,
+                trace_id VARCHAR(32),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -219,17 +229,48 @@ def migrate_db():
             cursor.execute("ALTER TABLE planning_runs ADD COLUMN claimed_at TIMESTAMP")
         if "claimed_by" not in run_columns:
             cursor.execute("ALTER TABLE planning_runs ADD COLUMN claimed_by VARCHAR(100)")
+        if "trace_id" not in run_columns:
+            cursor.execute("ALTER TABLE planning_runs ADD COLUMN trace_id VARCHAR(32)")
 
         # 为已存在的 planning_steps 补齐后续新增字段
         step_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(planning_steps)").fetchall()}
         if "cached_result_json" not in step_columns:
             cursor.execute("ALTER TABLE planning_steps ADD COLUMN cached_result_json TEXT")
+        if "trace_id" not in step_columns:
+            cursor.execute("ALTER TABLE planning_steps ADD COLUMN trace_id VARCHAR(32)")
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_runs_user ON planning_runs(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_runs_status ON planning_runs(status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_runs_idempotency ON planning_runs(user_id, idempotency_key)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_runs_claimed ON planning_runs(claimed_at)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_runs_trace ON planning_runs(trace_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_steps_run ON planning_steps(run_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_planning_steps_trace ON planning_steps(trace_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_agent_logs_trace ON agent_logs(trace_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_itineraries_trace ON itineraries(trace_id)")
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trace_spans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trace_id VARCHAR(32) NOT NULL,
+                span_id VARCHAR(32) NOT NULL,
+                parent_span_id VARCHAR(32),
+                name VARCHAR(100) NOT NULL,
+                service VARCHAR(50) NOT NULL,
+                start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                end_time TIMESTAMP,
+                duration_ms INTEGER,
+                status VARCHAR(20) DEFAULT 'ok',
+                meta_json TEXT,
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_trace_spans_trace ON trace_spans(trace_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_trace_spans_span ON trace_spans(span_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_trace_spans_parent ON trace_spans(parent_span_id)")
         print("[DB] 数据库迁移完成")
         conn.commit()
     finally:

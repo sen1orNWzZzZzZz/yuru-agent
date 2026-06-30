@@ -5,9 +5,18 @@ Agent V3 抽象基类
 import logging
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any
 
 from app.integrations.llm_client import LLMClient
+from app.tracing import (
+    generate_span_id,
+    get_span_id,
+    get_trace_id,
+    record_span,
+    set_parent_span_id,
+    set_span_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +76,14 @@ class BaseAgentV3(ABC):
         3. 封装结果返回
         """
         start = time.time()
+        start_dt = datetime.now()
+        trace_id = get_trace_id()
+        parent_span_id = get_span_id()
+        span_id = None
+        if trace_id:
+            span_id = generate_span_id()
+            set_parent_span_id(parent_span_id)
+            set_span_id(span_id)
         try:
             # Step 1: 从数据库/外部API获取数据
             db_data = self._execute_with_db(context)
@@ -83,7 +100,7 @@ class BaseAgentV3(ABC):
                     db_data = self._merge_llm_result(db_data, llm_result)
 
             duration_ms = int((time.time() - start) * 1000)
-            return AgentResult(
+            result = AgentResult(
                 agent_type=self.agent_type,
                 agent_name=self.agent_name,
                 status="completed",
@@ -92,16 +109,53 @@ class BaseAgentV3(ABC):
                 duration_ms=duration_ms,
                 usage=usage,
             )
+            if trace_id:
+                record_span(
+                    name=f"agent.{self.agent_type}",
+                    service="agent",
+                    start_time=start_dt,
+                    end_time=datetime.now(),
+                    status="ok",
+                    meta={
+                        "agent_type": self.agent_type,
+                        "agent_name": self.agent_name,
+                        "prompt_tokens": usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage.get("completion_tokens", 0),
+                        "estimated_prompt_tokens": usage.get("estimated_prompt_tokens", 0),
+                        "estimated_completion_tokens": usage.get("estimated_completion_tokens", 0),
+                    },
+                    span_id=span_id,
+                    parent_span_id=parent_span_id,
+                    trace_id=trace_id,
+                )
+            return result
 
         except Exception as e:
             logger.error(f"[{self.agent_name}] 执行失败: {e}")
+            duration_ms = int((time.time() - start) * 1000)
+            if trace_id:
+                record_span(
+                    name=f"agent.{self.agent_type}",
+                    service="agent",
+                    start_time=start_dt,
+                    end_time=datetime.now(),
+                    status="error",
+                    meta={"agent_type": self.agent_type, "agent_name": self.agent_name},
+                    error=str(e),
+                    span_id=span_id,
+                    parent_span_id=parent_span_id,
+                    trace_id=trace_id,
+                )
             return AgentResult(
                 agent_type=self.agent_type,
                 agent_name=self.agent_name,
                 status="failed",
                 error=str(e),
-                duration_ms=int((time.time() - start) * 1000),
+                duration_ms=duration_ms,
             )
+        finally:
+            if trace_id:
+                set_span_id(parent_span_id)
 
     def _call_llm(self, context: dict, db_data: dict) -> dict:
         """调用LLM进行智能分析"""

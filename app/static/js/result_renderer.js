@@ -71,6 +71,8 @@ function renderResult(data) {
         html += renderWeatherCard(agents.weather_result);
     }
 
+    html += renderItineraryMapCard();
+
     html += `
     <div class="animate-fade-up animate-delay-2">
         <div class="heading-sm mb-2">每日行程</div>`;
@@ -150,6 +152,7 @@ function renderResult(data) {
     </div>`;
 
     sec.innerHTML = html;
+    renderItineraryMap({itinerary: it, agents, destination: data.destination});
 }
 
 function escapeHtml(text) {
@@ -507,4 +510,296 @@ function renderWeatherCard(weather) {
             </div>
         </div>
     </div>`;
+}
+
+// ========================= 行程地图 =========================
+
+const mapState = {
+    map: null,
+    markers: [],
+    polylines: [],
+    pois: [],
+    dayPaths: {},
+    selectedDay: 'all',
+};
+
+function renderItineraryMapCard() {
+    return `
+    <div class="card map-card animate-fade-up animate-delay-1">
+        <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="3 11 22 2 13 21 11 13 3 11"/>
+            </svg>
+            行程地图
+        </div>
+        <div class="map-day-filters" id="mapDayFilters">
+            <span class="map-filter is-active" data-day="all">全部</span>
+        </div>
+        <div id="itineraryMap" class="map-container">
+            <div class="map-loading">正在加载地图…</div>
+        </div>
+        <div class="map-legend">
+            <span class="map-legend-item"><i class="legend-dot hotel"></i>酒店</span>
+            <span class="map-legend-item"><i class="legend-dot restaurant"></i>餐厅</span>
+            <span class="map-legend-item"><i class="legend-dot attraction"></i>景点</span>
+            <span class="map-legend-item"><i class="legend-dot recommended"></i>推荐酒店</span>
+        </div>
+    </div>`;
+}
+
+function renderItineraryMap(data) {
+    const container = document.getElementById('itineraryMap');
+    if (!container) return;
+
+    fetch('/api/v3/map-config')
+        .then(r => r.json())
+        .then(cfg => {
+            if (!cfg.success || !cfg.enabled) {
+                container.innerHTML = `<div class="map-disabled-hint">${escapeHtml(cfg.message || '地图未启用')}</div>`;
+                return;
+            }
+            return loadAMapScript(cfg.key).then(() => buildItineraryMap(container, data));
+        })
+        .catch(e => {
+            container.innerHTML = `<div class="map-disabled-hint">地图加载失败：${escapeHtml(e.message)}</div>`;
+        });
+}
+
+function loadAMapScript(key) {
+    return new Promise((resolve, reject) => {
+        if (window.AMap && window.AMap.Map) {
+            resolve();
+            return;
+        }
+        const script = document.createElement('script');
+        script.type = 'text/javascript';
+        script.src = `https://webapi.amap.com/maps?v=1.4.15&key=${encodeURIComponent(key)}`;
+        script.onerror = () => reject(new Error('高德地图脚本加载失败'));
+        script.onload = () => {
+            if (window.AMap && window.AMap.Map) {
+                resolve();
+            } else {
+                reject(new Error('高德地图 API 未正确初始化'));
+            }
+        };
+        document.head.appendChild(script);
+    });
+}
+
+function getAgentData(agent) {
+    if (!agent) return {};
+    let d = agent.data || {};
+    if (d.data) d = d.data;
+    return d;
+}
+
+function nameMatch(a, b) {
+    if (!a || !b) return false;
+    const x = String(a).toLowerCase();
+    const y = String(b).toLowerCase();
+    return x.includes(y) || y.includes(x);
+}
+
+function buildItineraryMap(container, data) {
+    const it = data.itinerary || {};
+    const days = it.days || [];
+    const agents = data.agents || {};
+
+    const poiByName = new Map();
+    const allPois = [];
+
+    function addPoi(raw, type) {
+        const lat = parseFloat(raw.latitude);
+        const lng = parseFloat(raw.longitude);
+        if (Number.isNaN(lat) || Number.isNaN(lng)) return;
+        const name = String(raw.name || '').trim();
+        if (!name) return;
+
+        let poi = poiByName.get(name);
+        if (!poi) {
+            poi = {
+                name,
+                type,
+                lat,
+                lng,
+                address: raw.address || '',
+                rating: raw.rating != null ? raw.rating : null,
+                source: raw.source || 'unknown',
+                isRecommendedHotel: false,
+                days: new Set(),
+            };
+            poiByName.set(name, poi);
+            allPois.push(poi);
+        }
+        // 同一名称出现多次时，以酒店类型为优先（通常酒店名不会与其他类型重复）
+        if (type === 'hotel') poi.type = 'hotel';
+    }
+
+    const hotelData = getAgentData(agents.hotel_result);
+    (hotelData.hotels || []).forEach(h => addPoi(h, 'hotel'));
+
+    const restaurantData = getAgentData(agents.restaurant_result);
+    (restaurantData.restaurants || []).forEach(r => addPoi(r, 'restaurant'));
+
+    const attractionData = getAgentData(agents.attraction_result);
+    (attractionData.attractions || []).forEach(a => addPoi(a, 'attraction'));
+
+    // 标记最终推荐酒店
+    const recommendedHotel = String(it.hotel || '').trim();
+    if (recommendedHotel && poiByName.has(recommendedHotel)) {
+        poiByName.get(recommendedHotel).isRecommendedHotel = true;
+    }
+
+    // 把每日活动与 POI 关联
+    days.forEach(day => {
+        (day.activities || []).forEach(act => {
+            const actName = String(act.name || '').trim();
+            if (!actName) return;
+            allPois.forEach(poi => {
+                if (nameMatch(poi.name, actName)) {
+                    poi.days.add(day.day);
+                }
+            });
+        });
+    });
+
+    if (allPois.length === 0) {
+        container.innerHTML = '<div class="map-disabled-hint">未找到可展示的坐标数据</div>';
+        return;
+    }
+
+    const map = new AMap.Map(container, {
+        resizeEnable: true,
+        zoom: 12,
+        center: [allPois[0].lng, allPois[0].lat],
+    });
+    mapState.map = map;
+    mapState.pois = allPois;
+
+    mapState.markers = allPois.map(poi => {
+        const marker = new AMap.Marker({
+            map,
+            position: [poi.lng, poi.lat],
+            title: poi.name,
+            icon: buildMapIcon(poi),
+            offset: new AMap.Pixel(-14, -36),
+        });
+        marker.poi = poi;
+        marker.on('click', () => openMapInfoWindow(marker, poi));
+        return marker;
+    });
+
+    // 构建每日路线（按活动顺序连线）
+    mapState.dayPaths = {};
+    days.forEach(day => {
+        const path = [];
+        (day.activities || []).forEach(act => {
+            const actName = String(act.name || '').trim();
+            if (!actName) return;
+            const matched = allPois.find(p => nameMatch(p.name, actName));
+            if (matched) path.push([matched.lng, matched.lat]);
+        });
+        if (path.length > 1) {
+            mapState.dayPaths[day.day] = path;
+        }
+    });
+
+    renderMapDayFilters(days);
+    updateMapView('all');
+    map.setFitView();
+}
+
+function buildMapIcon(poi) {
+    const color = poi.isRecommendedHotel
+        ? '#3B82F6'
+        : { hotel: '#F59E0B', restaurant: '#EF4444', attraction: '#10B981' }[poi.type] || '#6366F1';
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 24 24">
+        <path fill="${color}" stroke="#fff" stroke-width="1.5" d="M12 2C8 2 5 5 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-4-3-7-7-7z"/>
+        <circle cx="12" cy="9" r="2.5" fill="#fff"/>
+    </svg>`;
+    const base64 = btoa(unescape(encodeURIComponent(svg)));
+    const url = `data:image/svg+xml;base64,${base64}`;
+    return new AMap.Icon({
+        image: url,
+        size: new AMap.Size(28, 36),
+        imageSize: new AMap.Size(28, 36),
+    });
+}
+
+function openMapInfoWindow(marker, poi) {
+    const typeText = { hotel: '酒店', restaurant: '餐厅', attraction: '景点' }[poi.type] || '地点';
+    const rating = poi.rating != null ? `<div>评分：${poi.rating}</div>` : '';
+    const content = `
+        <div class="map-info-window">
+            <div class="map-info-title">${escapeHtml(poi.name)}</div>
+            <div class="map-info-type">${typeText}${poi.isRecommendedHotel ? ' · 推荐酒店' : ''}</div>
+            ${rating}
+            <div>${escapeHtml(poi.address || '')}</div>
+        </div>`;
+    const info = new AMap.InfoWindow({ content, offset: new AMap.Pixel(0, -36) });
+    info.open(mapState.map, marker.getPosition());
+}
+
+function renderMapDayFilters(days) {
+    const container = document.getElementById('mapDayFilters');
+    if (!container) return;
+    let html = '<span class="map-filter is-active" data-day="all">全部</span>';
+    days.forEach(day => {
+        html += `<span class="map-filter" data-day="${day.day}">第${day.day}天</span>`;
+    });
+    container.innerHTML = html;
+    container.querySelectorAll('.map-filter').forEach(el => {
+        el.addEventListener('click', () => {
+            container.querySelectorAll('.map-filter').forEach(b => b.classList.remove('is-active'));
+            el.classList.add('is-active');
+            updateMapView(el.dataset.day);
+        });
+    });
+}
+
+function updateMapView(day) {
+    mapState.selectedDay = day;
+    const dayNum = day === 'all' ? null : parseInt(day, 10);
+
+    mapState.markers.forEach(marker => {
+        const poi = marker.poi;
+        const visible = dayNum === null || poi.days.has(dayNum);
+        marker.setVisible(visible);
+    });
+
+    mapState.polylines.forEach(pl => mapState.map.remove(pl));
+    mapState.polylines = [];
+
+    const colors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
+
+    if (dayNum !== null && mapState.dayPaths[dayNum]) {
+        const pl = new AMap.Polyline({
+            map: mapState.map,
+            path: mapState.dayPaths[dayNum],
+            strokeColor: '#3B82F6',
+            strokeWeight: 3,
+            strokeStyle: 'dashed',
+            strokeOpacity: 0.8,
+        });
+        mapState.polylines.push(pl);
+    } else if (dayNum === null) {
+        Object.entries(mapState.dayPaths).forEach(([d, path]) => {
+            const color = colors[(parseInt(d, 10) - 1) % colors.length];
+            const pl = new AMap.Polyline({
+                map: mapState.map,
+                path,
+                strokeColor: color,
+                strokeWeight: 2,
+                strokeStyle: 'dashed',
+                strokeOpacity: 0.7,
+            });
+            mapState.polylines.push(pl);
+        });
+    }
+
+    const visibleMarkers = mapState.markers.filter(m => m.getVisible());
+    if (visibleMarkers.length) {
+        mapState.map.setFitView(visibleMarkers);
+    }
 }

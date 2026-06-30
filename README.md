@@ -246,6 +246,7 @@ docker-compose down
 | GET | `/api/v3/poi/{city}` | 城市POI数据 |
 | GET | `/api/v3/xiaohongshu/{city}` | 小红书笔记 |
 | GET | `/api/v3/weather/{city}` | 天气查询 |
+| GET | `/api/v3/map-config` | 获取前端地图配置（高德 JS API Key） |
 
 ---
 

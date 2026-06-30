@@ -23,7 +23,9 @@
             <div class="navbar-nav">
                 <a href="/" class="{% if request.path == '/' %}active{% endif %}">首页</a>
                 <a href="/plan" class="{% if request.path == '/plan' %}active{% endif %}">智能规划</a>
-                <a href="/admin" class="{% if request.path.startswith('/admin') %}active{% endif %}">系统管理</a>
+                <a href="/admin" class="{% if request.path == '/admin' %}active{% endif %}">系统管理</a>
+                <a href="/admin/dashboard" class="{% if request.path == '/admin/dashboard' %}active{% endif %}">观测大盘</a>
+                <a href="/admin/trace" class="{% if request.path == '/admin/trace' %}active{% endif %}">Trace</a>
             </div>
             <div class="navbar-nav" id="authNav">
                 <a href="/login" class="{% if request.path == '/login' %}active{% endif %}">登录</a>

@@ -42,6 +42,7 @@ from app.auth import (
 )
 from app.db.database import execute, get_db_connection, init_db, query_all, query_one
 from app.integrations.config_manager import IntegrationConfig
+from app.integrations.map import MapClient
 from app.knowledge import (
     ChecklistGenerator,
     RAG_AVAILABLE,
@@ -50,6 +51,17 @@ from app.knowledge import (
     load_knowledge_template,
 )
 from app.mcp_server import MCPMessagesRoute, handle_mcp_sse
+from app.tracing import (
+    clear,
+    current_context,
+    generate_span_id,
+    generate_trace_id,
+    get_trace_id,
+    record_span,
+    restore_context,
+    set_span_id,
+    set_trace_id,
+)
 
 # ============================================================
 # 初始化
@@ -100,6 +112,7 @@ def save_request_log(
     client_ip: str | None,
     user_agent: str | None,
     error_message: str | None,
+    trace_id: str | None = None,
 ) -> None:
     """将请求日志写入 SQLite"""
     try:
@@ -109,8 +122,8 @@ def save_request_log(
                 conn,
                 """
                 INSERT INTO request_logs
-                (method, path, query_params, status_code, duration_ms, client_ip, user_agent, error_message)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (method, path, query_params, status_code, duration_ms, client_ip, user_agent, error_message, trace_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     method,
@@ -121,6 +134,7 @@ def save_request_log(
                     client_ip,
                     user_agent,
                     error_message,
+                    trace_id,
                 ),
             )
         finally:
@@ -131,7 +145,7 @@ def save_request_log(
 
 
 class RequestLoggingMiddleware:
-    """纯 ASGI 请求日志中间件，不破坏 SSE 等流式响应."""
+    """纯 ASGI 请求日志中间件，不破坏 SSE 等流式响应，同时生成 trace_id."""
 
     def __init__(self, app):
         self.app = app
@@ -141,7 +155,16 @@ class RequestLoggingMiddleware:
             await self.app(scope, receive, send)
             return
 
+        from datetime import datetime
+
+        trace_id = generate_trace_id()
+        request_span_id = generate_span_id()
+        set_trace_id(trace_id)
+        set_span_id(request_span_id)
+        scope["trace_id"] = trace_id
+
         start_time = time.time()
+        start_dt = datetime.now()
         status_code = None
         error_message = None
 
@@ -170,7 +193,27 @@ class RequestLoggingMiddleware:
                     client_ip=scope.get("client", (None, None))[0] if scope.get("client") else None,
                     user_agent=dict(scope.get("headers", [])).get(b"user-agent", b"").decode("utf-8", errors="ignore"),
                     error_message=error_message,
+                    trace_id=trace_id,
                 )
+                record_span(
+                    name=f"{scope.get('method', '')} {path}",
+                    service="http",
+                    start_time=start_dt,
+                    end_time=datetime.now(),
+                    status="ok" if not error_message and (status_code is None or status_code < 500) else "error",
+                    meta={
+                        "method": scope.get("method", ""),
+                        "path": path,
+                        "query_params": str(scope.get("query_string", b""), encoding="utf-8"),
+                        "status_code": status_code,
+                        "duration_ms": duration_ms,
+                    },
+                    error=error_message,
+                    span_id=request_span_id,
+                    parent_span_id=None,
+                    trace_id=trace_id,
+                )
+            clear()
 
 
 app.add_middleware(RequestLoggingMiddleware)
@@ -402,6 +445,12 @@ async def dashboard_page(request: Request):
     return templates.TemplateResponse(request, "dashboard.html")
 
 
+@app.get("/admin/trace")
+async def trace_page(request: Request):
+    """系统 Trace 调用链监控页"""
+    return templates.TemplateResponse(request, "trace.html")
+
+
 @app.get("/login")
 async def login_page(request: Request):
     """登录/注册页"""
@@ -430,7 +479,8 @@ async def create_plan(req: PlanRequest, request: Request, idempotency_key: str |
 
         context = _build_planning_context(req, preferences)
         run_service = PlanningRunService()
-        run_id, is_new = run_service.create_run_idempotent(user_id, context, idempotency_key)
+        trace_id = get_trace_id()
+        run_id, is_new = run_service.create_run_idempotent(user_id, context, idempotency_key, trace_id=trace_id)
 
         if not is_new:
             # 幂等命中：如果已有 Run 已完成/失败，直接返回；否则等待执行
@@ -478,6 +528,7 @@ async def create_plan_stream(
 
     context = _build_planning_context(req, preferences)
     run_service = PlanningRunService()
+    trace_id = get_trace_id()
 
     if run_id:
         # 订阅已有 Run，校验存在性
@@ -485,7 +536,7 @@ async def create_plan_stream(
         if not run:
             return {"success": False, "message": "Run 不存在"}
     else:
-        run_id, is_new = run_service.create_run_idempotent(user_id, context, idempotency_key)
+        run_id, is_new = run_service.create_run_idempotent(user_id, context, idempotency_key, trace_id=trace_id)
 
     run = run_service.get_run(run_id)
 
@@ -1473,6 +1524,146 @@ async def dashboard_agent_logs(range: str = "24h", limit: int = 50, offset: int 
         conn.close()
 
 
+# ============================================================
+# API路由 - Trace 调用链监控
+# ============================================================
+
+@app.get("/api/admin/traces")
+async def list_traces(
+    range: str = "24h",
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+):
+    """Trace 列表：聚合 HTTP 请求、PlanningRun、行程与 Span 数量"""
+    range_sql, range_param = _dashboard_range_clause(range)
+    # trace 列表涉及多表 join，时间字段需要加别名限定
+    trace_range_sql = range_sql.replace("created_at", "r.created_at")
+    conn = get_db_connection()
+    try:
+        status_filter = ""
+        params = list(range_param)
+        if status:
+            status_filter = "AND pr.status = ?"
+            params.append(status)
+
+        traces = query_all(
+            conn,
+            f"""
+            SELECT
+                r.trace_id,
+                r.method,
+                r.path,
+                r.status_code,
+                r.duration_ms AS request_duration_ms,
+                r.created_at,
+                r.error_message AS request_error,
+                pr.id AS run_id,
+                pr.status AS run_status,
+                pr.itinerary_id,
+                i.destination,
+                COUNT(DISTINCT ts.id) AS span_count,
+                COALESCE(SUM(ts.duration_ms), 0) AS total_span_duration_ms
+            FROM request_logs r
+            LEFT JOIN planning_runs pr ON pr.trace_id = r.trace_id
+            LEFT JOIN itineraries i ON i.trace_id = r.trace_id
+            LEFT JOIN trace_spans ts ON ts.trace_id = r.trace_id
+            WHERE r.trace_id IS NOT NULL AND ({trace_range_sql}) {status_filter}
+            GROUP BY r.trace_id
+            ORDER BY r.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        )
+
+        total = query_one(
+            conn,
+            f"""
+            SELECT COUNT(DISTINCT trace_id) AS c FROM request_logs
+            WHERE trace_id IS NOT NULL AND ({range_sql})
+            """,
+            range_param,
+        )["c"]
+
+        return {"success": True, "data": traces, "total": total, "limit": limit, "offset": offset}
+    finally:
+        conn.close()
+
+
+def _build_span_tree(spans: list[dict]) -> list[dict]:
+    """将扁平 spans 构建为树形结构"""
+    nodes: dict[str, dict] = {}
+    for s in spans:
+        meta = {}
+        try:
+            if s.get("meta_json"):
+                meta = json.loads(s["meta_json"])
+        except Exception:
+            pass
+        node = {**s, "meta": meta, "children": []}
+        nodes[s["span_id"]] = node
+    roots = []
+    for s in spans:
+        node = nodes[s["span_id"]]
+        parent_id = s.get("parent_span_id")
+        if parent_id and parent_id in nodes:
+            nodes[parent_id]["children"].append(node)
+        else:
+            roots.append(node)
+    return roots
+
+
+@app.get("/api/admin/traces/{trace_id}")
+async def get_trace_detail(trace_id: str):
+    """Trace 详情：请求、Run、步骤、Agent 日志、Spans 与调用链树"""
+    conn = get_db_connection()
+    try:
+        request_log = query_one(conn, "SELECT * FROM request_logs WHERE trace_id = ?", (trace_id,))
+        run = query_one(conn, "SELECT * FROM planning_runs WHERE trace_id = ?", (trace_id,))
+        steps = query_all(
+            conn,
+            "SELECT * FROM planning_steps WHERE trace_id = ? ORDER BY step_number, id",
+            (trace_id,),
+        )
+        agent_logs = query_all(
+            conn,
+            "SELECT * FROM agent_logs WHERE trace_id = ? ORDER BY id",
+            (trace_id,),
+        )
+        spans = query_all(
+            conn,
+            "SELECT * FROM trace_spans WHERE trace_id = ? ORDER BY start_time, id",
+            (trace_id,),
+        )
+
+        # 解析 meta_json
+        for s in spans:
+            try:
+                s["meta"] = json.loads(s["meta_json"]) if s.get("meta_json") else {}
+            except Exception:
+                s["meta"] = {}
+        for log in agent_logs:
+            try:
+                log["output_result"] = json.loads(log["output_result"]) if log.get("output_result") else {}
+            except Exception:
+                pass
+
+        return {
+            "success": True,
+            "data": {
+                "trace_id": trace_id,
+                "request": request_log,
+                "run": run,
+                "steps": steps,
+                "agent_logs": agent_logs,
+                "spans": spans,
+                "span_tree": _build_span_tree(spans),
+            },
+        }
+    finally:
+        conn.close()
+
+
 @app.post("/api/admin/knowledge/ingest")
 async def ingest_knowledge(force: bool = False):
     """手动触发旅行知识库向量化（首次启动或文档更新后调用）."""
@@ -1670,10 +1861,33 @@ async def get_weather(city: str, days: int = 3):
     }
 
 
+@app.get("/api/v3/map-config")
+async def get_map_config():
+    """
+    获取前端地图配置
+    高德 WebService Key 与 JS API Key 需要分开申请，因此优先读取 map_js 专用配置。
+    """
+    js_config = IntegrationConfig.get_map_js_config()
+    if js_config and js_config.get("api_key"):
+        return {
+            "success": True,
+            "enabled": True,
+            "provider": "amap",
+            "key": js_config.get("api_key"),
+        }
+
+    # 未配置 JS API Key 时，不再回退到 WebService Key，因为两者通常不通用
+    return {
+        "success": True,
+        "enabled": False,
+        "message": "未配置高德 JS API Key，请在管理后台添加“地图 JS API”配置",
+    }
+
+
 @app.get("/api/ping")
 async def ping():
     """健康检查"""
-    return {"ok": True, "version": "3.0.0", "features": ["planner-agent", "llm", "weather", "map", "db-mock", "mcp-server", "request-logs", "metrics-viz"]}
+    return {"ok": True, "version": "3.0.0", "features": ["planner-agent", "llm", "weather", "map", "db-mock", "mcp-server", "request-logs", "metrics-viz", "itinerary-map"]}
 
 
 # 兼容旧版入口

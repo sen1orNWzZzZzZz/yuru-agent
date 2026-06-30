@@ -336,6 +336,46 @@
     </div>
 </div>
 
+<!-- 地图 JS API 配置 -->
+<div class="card config-card animate-fade-up animate-delay-2">
+    <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="1 6 1 22 8 18 16 22 21 18 21 2 16 6 8 2 1 6"/>
+            <line x1="8" y1="2" x2="8" y2="18"/>
+            <line x1="16" y1="6" x2="16" y2="22"/>
+        </svg>
+        地图 JS API 配置
+    </div>
+    <form id="map_jsForm" onsubmit="return saveApiConfig(event, 'map_js')">
+        <input type="hidden" id="map_jsProvider" value="amap_js">
+        <input type="hidden" id="map_jsUrl" value="">
+        <div class="form-row">
+            <div class="form-group" style="flex:2;">
+                <label>高德 JS API Key *</label>
+                <input type="password" id="map_jsKey" placeholder="请填写高德 JS API 专用 Key" required>
+            </div>
+        </div>
+        <div style="display:flex;gap:16px;">
+            <button type="submit" class="btn btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/>
+                </svg>
+                保存
+            </button>
+        </div>
+        <div class="help-box">
+            <strong>说明：</strong> 高德的 <a href="https://console.amap.com/" target="_blank">JS API Key</a> 与 WebService API Key 是分开的，
+            请确保该 Key 已开通“Web端(JS API)”权限，否则前端地图会报 <code>KEY_ERROR</code>。
+        </div>
+    </form>
+
+    <div class="config-list">
+        <div class="config-list-title">已保存的地图 JS API 配置</div>
+        <div id="map_jsConfigList"><div class="text-muted" style="padding:8px 0;">加载中...</div></div>
+    </div>
+</div>
+
 <!-- 可观测性指标 -->
 <div class="card config-card animate-fade-up animate-delay-3">
     <div class="card-title">
@@ -455,7 +495,7 @@ let agentPieChart = null;
 let editingConfig = null;  // { type, id }
 
 const PROVIDER_LABELS = {
-    amap: '高德地图', baidu: '百度地图',
+    amap: '高德地图', baidu: '百度地图', amap_js: '高德地图 JS API',
     openweathermap: 'OpenWeatherMap', qweather: '和风天气'
 };
 
@@ -747,7 +787,7 @@ async function testApi(configType) {
 }
 
 async function loadConfigLists() {
-    for (const type of ['llm', 'weather', 'map']) {
+    for (const type of ['llm', 'weather', 'map', 'map_js']) {
         const container = document.getElementById(type + 'ConfigList');
         if (!container) continue;
         container.innerHTML = '<div class="text-muted" style="padding:8px 0;">加载中...</div>';

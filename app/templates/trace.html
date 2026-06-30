@@ -1,0 +1,393 @@
+{% extends "base_v3.html" %}
+
+{% block title %}Trace 调用链 - 灵动旅心 V3{% endblock %}
+
+{% block extra_css %}
+<style>
+.trace-header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; margin-bottom:28px; }
+.trace-header-left h1 { margin-bottom:4px; }
+.trace-header-left p { color:var(--text-secondary); font-size:0.85rem; margin:0; }
+.trace-controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.range-btn { padding:6px 14px; border-radius:999px; border:1px solid var(--border); background:var(--bg-elevated); color:var(--text-secondary); font-size:0.8rem; cursor:pointer; transition:all .2s; }
+.range-btn:hover, .range-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+.refresh-toggle { display:flex; align-items:center; gap:6px; font-size:0.8rem; color:var(--text-secondary); cursor:pointer; }
+
+.trace-list-card { margin-bottom:24px; }
+.trace-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+.trace-table th, .trace-table td { padding:10px 12px; border-bottom:1px solid var(--border-light); text-align:left; }
+.trace-table th { color:var(--text-secondary); font-weight:500; background:var(--bg-soft); }
+.trace-table tbody tr { cursor:pointer; transition:background .15s; }
+.trace-table tbody tr:hover { background:var(--bg-soft); }
+.trace-table tbody tr.is-active { background:var(--accent-soft); }
+.status-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px; font-size:0.75rem; }
+.status-badge .dot { width:6px; height:6px; border-radius:50%; }
+.status-ok { background:var(--success-soft); color:var(--success); }
+.status-ok .dot { background:var(--success); }
+.status-err { background:var(--danger-soft); color:var(--danger); }
+.status-err .dot { background:var(--danger); }
+.status-warn { background:var(--warning-soft); color:var(--warning); }
+.status-warn .dot { background:var(--warning); }
+
+.trace-detail { display:none; }
+.trace-detail.is-visible { display:block; }
+.detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px; }
+@media (max-width: 900px) { .detail-grid { grid-template-columns:1fr; } }
+
+.flame-card { grid-column:1 / -1; }
+.flamegraph { position:relative; padding:12px; background:var(--bg-soft); border-radius:var(--radius-sm); overflow-x:auto; }
+.flame-row { display:flex; align-items:center; height:30px; margin-bottom:4px; white-space:nowrap; }
+.flame-label { width:220px; flex-shrink:0; font-size:0.78rem; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; padding-right:10px; }
+.flame-bar-wrap { flex:1; min-width:200px; height:22px; background:rgba(0,0,0,0.03); border-radius:4px; position:relative; }
+.flame-bar { height:100%; border-radius:4px; position:absolute; top:0; display:flex; align-items:center; padding:0 8px; font-size:0.7rem; color:#fff; overflow:hidden; text-shadow:0 1px 2px rgba(0,0,0,.25); }
+.flame-bar.http { background:rgba(180,83,9,0.85); }
+.flame-bar.planner { background:rgba(139,92,246,0.85); }
+.flame-bar.agent { background:rgba(59,130,246,0.85); }
+.flame-bar.llm { background:rgba(16,185,129,0.85); }
+.flame-bar.weather { background:rgba(14,165,233,0.85); }
+.flame-bar.map { background:rgba(245,158,11,0.85); }
+.flame-bar.other { background:rgba(120,113,108,0.85); }
+
+.tree-node { border-left:2px solid var(--border-light); margin-left:8px; padding-left:12px; }
+.tree-node-header { display:flex; gap:10px; align-items:center; font-size:0.85rem; padding:5px 0; cursor:pointer; }
+.tree-node-header:hover { color:var(--accent); }
+.tree-badge { font-size:0.7rem; padding:2px 8px; border-radius:999px; background:var(--bg-soft); color:var(--text-secondary); }
+.tree-duration { font-size:0.75rem; color:var(--text-muted); }
+.tree-children { display:none; }
+.tree-children.is-expanded { display:block; }
+
+.agent-log-item { padding:10px; border-bottom:1px solid var(--border-light); font-size:0.85rem; }
+.agent-log-item:last-child { border-bottom:none; }
+.step-item { padding:8px 10px; border-bottom:1px solid var(--border-light); font-size:0.85rem; }
+.step-type { display:inline-block; padding:2px 8px; border-radius:999px; font-size:0.7rem; margin-right:8px; }
+.step-type.thought { background:var(--success-soft); color:var(--success); }
+.step-type.tool_call { background:var(--accent-soft); color:var(--accent); }
+.step-type.observation { background:var(--info-soft); color:var(--info); }
+
+.meta-table { width:100%; font-size:0.8rem; }
+.meta-table td { padding:6px 8px; border-bottom:1px solid var(--border-light); vertical-align:top; }
+.meta-table td:first-child { width:120px; color:var(--text-muted); }
+
+.empty-state { text-align:center; padding:40px 20px; color:var(--text-secondary); font-size:0.9rem; }
+.pagination { display:flex; gap:8px; align-items:center; justify-content:flex-end; margin-top:12px; font-size:0.85rem; }
+.pagination button { padding:4px 10px; border-radius:var(--radius-xs); border:1px solid var(--border); background:var(--bg-elevated); cursor:pointer; }
+.pagination button:disabled { opacity:0.5; cursor:not-allowed; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="trace-header animate-fade-up">
+    <div class="trace-header-left">
+        <h1 class="heading-lg">系统 Trace 调用链</h1>
+        <p>追踪一次 HTTP 请求 → PlanningRun → Agent → 外部 API 的完整调用链路（含 Mock）</p>
+    </div>
+    <div class="trace-controls">
+        <button class="range-btn active" data-range="24h" onclick="setRange('24h')">近24小时</button>
+        <button class="range-btn" data-range="7d" onclick="setRange('7d')">近7天</button>
+        <button class="range-btn" data-range="30d" onclick="setRange('30d')">近30天</button>
+        <label class="refresh-toggle">
+            <input type="checkbox" id="autoRefresh" checked onchange="toggleAutoRefresh()">
+            <span>自动刷新</span>
+        </label>
+    </div>
+</div>
+
+<div class="card trace-list-card animate-fade-up animate-delay-1">
+    <table class="trace-table">
+        <thead>
+            <tr>
+                <th>时间</th>
+                <th>Method</th>
+                <th>Path</th>
+                <th>状态码</th>
+                <th>请求耗时</th>
+                <th>Run 状态</th>
+                <th>Span 数</th>
+                <th>目的地</th>
+            </tr>
+        </thead>
+        <tbody id="traceTableBody">
+            <tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:24px;">加载中...</td></tr>
+        </tbody>
+    </table>
+    <div class="pagination" id="pagination"></div>
+</div>
+
+<div id="traceDetail" class="trace-detail">
+    <div class="detail-grid">
+        <div class="card">
+            <h3 class="section-title">请求摘要</h3>
+            <div id="requestSummary"></div>
+        </div>
+        <div class="card">
+            <h3 class="section-title">Run / Agent 日志</h3>
+            <div id="agentLogs" style="max-height:320px;overflow:auto;"></div>
+        </div>
+    </div>
+
+    <div class="card flame-card">
+        <h3 class="section-title">耗时瀑布 / 火焰图</h3>
+        <div id="flamegraph" class="flamegraph"></div>
+    </div>
+
+    <div class="card">
+        <h3 class="section-title">调用链树</h3>
+        <div id="traceTree" style="max-height:480px;overflow:auto;"></div>
+    </div>
+
+    <div class="card">
+        <h3 class="section-title">Planning Steps</h3>
+        <div id="planningSteps" style="max-height:360px;overflow:auto;"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentRange = '24h';
+let currentOffset = 0;
+let currentTraceId = null;
+let refreshTimer = null;
+const limit = 50;
+
+function escapeHtml(s) {
+    if (s == null) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function formatDate(dt) {
+    if (!dt) return '-';
+    return new Date(dt).toLocaleString();
+}
+
+function formatDuration(ms) {
+    if (ms == null) return '-';
+    if (ms >= 1000) return (ms/1000).toFixed(2) + 's';
+    return Math.round(ms) + 'ms';
+}
+
+function statusBadge(code) {
+    if (!code) return '<span class="status-badge status-warn"><span class="dot"></span>无</span>';
+    const cls = code >= 400 ? 'status-err' : 'status-ok';
+    return `<span class="status-badge ${cls}"><span class="dot"></span>${code}</span>`;
+}
+
+function runStatusBadge(status) {
+    const map = {
+        completed: 'status-ok',
+        failed: 'status-err',
+        running: 'status-warn',
+        pending: 'status-warn',
+        retrying: 'status-warn',
+    };
+    const text = status || '无';
+    return `<span class="status-badge ${map[status] || 'status-warn'}"><span class="dot"></span>${text}</span>`;
+}
+
+function setRange(range) {
+    currentRange = range;
+    currentOffset = 0;
+    document.querySelectorAll('.range-btn').forEach(b => b.classList.toggle('active', b.dataset.range === range));
+    loadTraces();
+}
+
+function toggleAutoRefresh() {
+    const on = document.getElementById('autoRefresh').checked;
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    if (on) refreshTimer = setInterval(() => loadTraces(false), 5000);
+}
+
+async function loadTraces(showLoading = true) {
+    try {
+        const r = await apiGet(`/api/admin/traces?range=${currentRange}&limit=${limit}&offset=${currentOffset}`);
+        if (!r.success) {
+            document.getElementById('traceTableBody').innerHTML = `<tr><td colspan="8" class="empty-state">加载失败: ${escapeHtml(r.message)}</td></tr>`;
+            return;
+        }
+        renderTraceList(r.data || []);
+        renderPagination(r.total || 0);
+    } catch (e) {
+        document.getElementById('traceTableBody').innerHTML = `<tr><td colspan="8" class="empty-state">加载异常: ${escapeHtml(e.message)}</td></tr>`;
+    }
+}
+
+function renderTraceList(traces) {
+    const tbody = document.getElementById('traceTableBody');
+    if (!traces.length) {
+        tbody.innerHTML = `<tr><td colspan="8" class="empty-state">暂无 Trace 数据，请先创建一次行程规划</td></tr>`;
+        return;
+    }
+    tbody.innerHTML = traces.map(t => `
+        <tr data-trace-id="${escapeHtml(t.trace_id)}" onclick="showTraceDetail('${escapeHtml(t.trace_id)}')" class="${t.trace_id === currentTraceId ? 'is-active' : ''}">
+            <td>${formatDate(t.created_at)}</td>
+            <td><strong>${escapeHtml(t.method)}</strong></td>
+            <td>${escapeHtml(t.path)}</td>
+            <td>${statusBadge(t.status_code)}</td>
+            <td>${formatDuration(t.request_duration_ms)}</td>
+            <td>${runStatusBadge(t.run_status)}</td>
+            <td>${t.span_count || 0}</td>
+            <td>${escapeHtml(t.destination || '-')}</td>
+        </tr>
+    `).join('');
+}
+
+function renderPagination(total) {
+    const el = document.getElementById('pagination');
+    const totalPages = Math.ceil(total / limit) || 1;
+    const currentPage = Math.floor(currentOffset / limit) + 1;
+    el.innerHTML = `
+        <span>共 ${total} 条 · 第 ${currentPage}/${totalPages} 页</span>
+        <button onclick="changePage(-1)" ${currentOffset === 0 ? 'disabled' : ''}>上一页</button>
+        <button onclick="changePage(1)" ${currentOffset + limit >= total ? 'disabled' : ''}>下一页</button>
+    `;
+}
+
+function changePage(dir) {
+    currentOffset += dir * limit;
+    if (currentOffset < 0) currentOffset = 0;
+    loadTraces();
+}
+
+async function showTraceDetail(traceId) {
+    currentTraceId = traceId;
+    document.querySelectorAll('#traceTableBody tr').forEach(tr => tr.classList.toggle('is-active', tr.dataset.traceId === traceId));
+    const detail = document.getElementById('traceDetail');
+    detail.classList.add('is-visible');
+
+    try {
+        const r = await apiGet(`/api/admin/traces/${traceId}`);
+        if (!r.success) {
+            showToast(r.message || '加载详情失败', 'error');
+            return;
+        }
+        const d = r.data;
+        renderRequestSummary(d.request, d.run);
+        renderAgentLogs(d.agent_logs || []);
+        renderFlamegraph(d.spans || []);
+        renderTree(d.span_tree || [], document.getElementById('traceTree'));
+        renderSteps(d.steps || []);
+        detail.scrollIntoView({behavior:'smooth', block:'start'});
+    } catch (e) {
+        showToast('加载详情异常: ' + e.message, 'error');
+    }
+}
+
+function renderRequestSummary(req, run) {
+    const el = document.getElementById('requestSummary');
+    if (!req) { el.innerHTML = '<p class="empty-state">无请求日志</p>'; return; }
+    el.innerHTML = `
+        <table class="meta-table">
+            <tr><td>trace_id</td><td><code>${escapeHtml(req.trace_id)}</code></td></tr>
+            <tr><td>Method / Path</td><td>${escapeHtml(req.method)} ${escapeHtml(req.path)}</td></tr>
+            <tr><td>状态码</td><td>${statusBadge(req.status_code)}</td></tr>
+            <tr><td>请求耗时</td><td>${formatDuration(req.duration_ms)}</td></tr>
+            <tr><td>发生时间</td><td>${formatDate(req.created_at)}</td></tr>
+            ${req.error_message ? `<tr><td>错误</td><td style="color:var(--danger)">${escapeHtml(req.error_message)}</td></tr>` : ''}
+            ${run ? `<tr><td>Run ID</td><td>#${run.id} · ${runStatusBadge(run.status)}</td></tr>
+            <tr><td>Run 耗时</td><td>${formatDuration(new Date(run.updated_at) - new Date(run.created_at))}</td></tr>` : ''}
+        </table>
+    `;
+}
+
+function renderAgentLogs(logs) {
+    const el = document.getElementById('agentLogs');
+    if (!logs.length) { el.innerHTML = '<p class="empty-state">无 Agent 日志</p>'; return; }
+    el.innerHTML = logs.map(l => `
+        <div class="agent-log-item">
+            <div style="display:flex;justify-content:space-between;gap:8px;">
+                <strong>${escapeHtml(l.agent_name || l.agent_type)}</strong>
+                <span class="tree-badge">${formatDuration(l.duration_ms)}</span>
+            </div>
+            <div style="font-size:0.78rem;color:var(--text-secondary);margin-top:4px;">
+                status=${l.status} · prompt=${l.prompt_tokens || 0} · completion=${l.completion_tokens || 0}
+            </div>
+            ${l.error_message ? `<div style="font-size:0.78rem;color:var(--danger);margin-top:4px;">${escapeHtml(l.error_message)}</div>` : ''}
+        </div>
+    `).join('');
+}
+
+function serviceClass(service) {
+    return ['http','planner','agent','llm','weather','map'].includes(service) ? service : 'other';
+}
+
+function renderFlamegraph(spans) {
+    const el = document.getElementById('flamegraph');
+    if (!spans.length) { el.innerHTML = '<p class="empty-state">无 Span 数据</p>'; return; }
+
+    const times = spans.map(s => new Date(s.start_time).getTime());
+    const minT = Math.min(...times);
+    const maxEnd = Math.max(...spans.map(s => new Date(s.end_time || s.start_time).getTime()));
+    const total = Math.max(1, maxEnd - minT);
+
+    el.innerHTML = spans.map(s => {
+        const start = new Date(s.start_time).getTime();
+        const end = new Date(s.end_time || s.start_time).getTime();
+        const left = ((start - minT) / total) * 100;
+        const width = Math.max(0.5, ((end - start) / total) * 100);
+        const cls = serviceClass(s.service);
+        const title = `${s.name} · ${formatDuration(s.duration_ms)} · ${s.status}`;
+        return `
+            <div class="flame-row" title="${escapeHtml(title)}">
+                <div class="flame-label">${escapeHtml(s.name)}</div>
+                <div class="flame-bar-wrap">
+                    <div class="flame-bar ${cls}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%;">
+                        ${width > 8 ? escapeHtml(formatDuration(s.duration_ms)) : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderTree(nodes, container, level = 0) {
+    container.innerHTML = '';
+    if (!nodes.length) {
+        container.innerHTML = '<p class="empty-state">无调用链数据</p>';
+        return;
+    }
+    for (const node of nodes) {
+        const wrap = document.createElement('div');
+        wrap.className = 'tree-node';
+        const hasChildren = (node.children || []).length > 0;
+        const meta = node.meta || {};
+        const metaText = Object.entries(meta).slice(0, 3).map(([k, v]) => `${k}=${v}`).join(' · ');
+        wrap.innerHTML = `
+            <div class="tree-node-header" ${hasChildren ? 'onclick="toggleTreeNode(this)"' : ''}>
+                <span>${escapeHtml(node.name)}</span>
+                <span class="tree-badge">${escapeHtml(node.service)}</span>
+                <span class="tree-duration">${formatDuration(node.duration_ms)}</span>
+                <span style="font-size:0.75rem;color:var(--text-muted);margin-left:auto;">${escapeHtml(metaText)}</span>
+            </div>
+            <div class="tree-children ${level === 0 ? 'is-expanded' : ''}"></div>
+        `;
+        container.appendChild(wrap);
+        if (hasChildren) {
+            renderTree(node.children, wrap.querySelector('.tree-children'), level + 1);
+        }
+    }
+}
+
+function toggleTreeNode(header) {
+    const children = header.nextElementSibling;
+    if (children) children.classList.toggle('is-expanded');
+}
+
+function renderSteps(steps) {
+    const el = document.getElementById('planningSteps');
+    if (!steps.length) { el.innerHTML = '<p class="empty-state">无 Planning Steps</p>'; return; }
+    el.innerHTML = steps.map(s => `
+        <div class="step-item">
+            <span class="step-type ${escapeHtml(s.step_type)}">${escapeHtml(s.step_type)}</span>
+            <strong>${escapeHtml(s.tool_name || '')}</strong>
+            <span style="color:var(--text-muted);font-size:0.75rem;float:right;">#${s.step_number} · ${formatDuration(s.duration_ms)}</span>
+            ${s.content ? `<div style="margin-top:6px;color:var(--text-secondary);font-size:0.8rem;white-space:pre-wrap;">${escapeHtml(s.content)}</div>` : ''}
+            ${s.error_message ? `<div style="margin-top:6px;color:var(--danger);font-size:0.78rem;">${escapeHtml(s.error_message)}</div>` : ''}
+        </div>
+    `).join('');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadTraces();
+    toggleAutoRefresh();
+});
+</script>
+{% endblock %}

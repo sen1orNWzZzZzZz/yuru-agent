@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import time
+from datetime import datetime
 from typing import Any, Callable
 
 from app.agents.v3.base import AgentResult
@@ -18,6 +19,15 @@ from app.agents.v3.risk_agent import RiskAgent
 from app.agents.v3.tools import agent_result_to_observation, build_tool_registry
 from app.agents.v3.weather_agent import WeatherAgent
 from app.integrations.llm_client import LLMClient
+from app.tracing import (
+    current_context,
+    generate_span_id,
+    get_span_id,
+    get_trace_id,
+    record_span,
+    restore_context,
+    set_span_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +145,7 @@ class PlannerAgent:
         - 完成后更新 Run 状态
         """
         total_start = time.time()
+        plan_start_dt = datetime.now()
         context = {
             "destination": destination,
             "days": days,
@@ -146,11 +157,18 @@ class PlannerAgent:
         if preferences:
             context.update(preferences)
 
-        logger.info(f"[Planner] 开始规划: {destination} {days}天 {travelers}人")
+        trace_id = get_trace_id()
+        plan_span_id = None
+        plan_parent_span_id = get_span_id()
+        if trace_id:
+            plan_span_id = generate_span_id()
+            set_span_id(plan_span_id)
+
+        logger.info(f"[Planner] 开始规划: {destination} {days}天 {travelers}人 trace_id={trace_id}")
 
         run_service = PlanningRunService()
         if run_id is None:
-            run_id = run_service.create_run(user_id, context)
+            run_id = run_service.create_run(user_id, context, trace_id=trace_id)
         else:
             run_service.update_status(run_id, "running")
 
@@ -176,6 +194,7 @@ class PlannerAgent:
                 context, itinerary, results,
                 planning_trace=planning_trace,
                 user_id=user_id,
+                trace_id=trace_id,
             )
             run_service.update_status(
                 run_id, "completed",
@@ -185,6 +204,19 @@ class PlannerAgent:
 
             if user_id:
                 ProfileSummarizerAgent().summarize(user_id, context, itinerary)
+
+            if trace_id and plan_span_id:
+                record_span(
+                    name="planner.plan",
+                    service="planner",
+                    start_time=plan_start_dt,
+                    end_time=datetime.now(),
+                    status="ok",
+                    meta={"use_llm": self.use_llm, "run_id": run_id, "itinerary_id": itinerary_id},
+                    span_id=plan_span_id,
+                    parent_span_id=plan_parent_span_id,
+                    trace_id=trace_id,
+                )
 
             return {
                 "success": True,
@@ -205,8 +237,24 @@ class PlannerAgent:
             }
         except Exception as e:
             logger.exception(f"[Planner] run_id={run_id} 规划失败")
+            if trace_id and plan_span_id:
+                record_span(
+                    name="planner.plan",
+                    service="planner",
+                    start_time=plan_start_dt,
+                    end_time=datetime.now(),
+                    status="error",
+                    meta={"use_llm": self.use_llm, "run_id": run_id},
+                    error=str(e),
+                    span_id=plan_span_id,
+                    parent_span_id=plan_parent_span_id,
+                    trace_id=trace_id,
+                )
             run_service.update_status(run_id, "failed", error_message=str(e))
             raise
+        finally:
+            if trace_id:
+                set_span_id(plan_parent_span_id)
 
     def plan_stream(
         self,
@@ -221,9 +269,10 @@ class PlannerAgent:
         与 plan() 逻辑一致，但每产生一个 step 都会调用 on_step 回调，供 SSE 实时推送。
         支持外部传入 run_id 和 initial_results（断点续跑）。
         """
+        trace_id = get_trace_id()
         run_service = PlanningRunService()
         if run_id is None:
-            run_id = run_service.create_run(user_id, context)
+            run_id = run_service.create_run(user_id, context, trace_id=trace_id)
         else:
             run_service.update_status(run_id, "running")
 
@@ -258,6 +307,7 @@ class PlannerAgent:
                 context, itinerary, results,
                 planning_trace=planning_trace,
                 user_id=user_id,
+                trace_id=trace_id,
             )
             run_service.update_status(
                 run_id, "completed",
@@ -312,6 +362,7 @@ class PlannerAgent:
                 cached_result=cached_result if step["type"] == "observation" else None,
                 status="failed" if step.get("error") else "completed",
                 duration_ms=step.get("result", {}).get("duration_ms", 0) if step.get("result") else 0,
+                trace_id=get_trace_id(),
             )
             if on_step:
                 on_step(step)
@@ -374,13 +425,19 @@ class PlannerAgent:
         return results, risk_result, planning_trace
 
     def _execute_sub_agents(self, context: dict) -> dict[str, Any]:
-        """并行执行所有子Agent"""
+        """并行执行所有子Agent，跨线程透传 trace 上下文"""
+        ctx = current_context()
+
+        def run_agent(agent) -> AgentResult:
+            restore_context(ctx)
+            return agent.execute(context)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            future_weather = executor.submit(self.weather_agent.execute, context)
-            future_hotel = executor.submit(self.hotel_agent.execute, context)
-            future_restaurant = executor.submit(self.restaurant_agent.execute, context)
-            future_attraction = executor.submit(self.attraction_agent.execute, context)
-            future_transport = executor.submit(self.transport_agent.execute, context)
+            future_weather = executor.submit(run_agent, self.weather_agent)
+            future_hotel = executor.submit(run_agent, self.hotel_agent)
+            future_restaurant = executor.submit(run_agent, self.restaurant_agent)
+            future_attraction = executor.submit(run_agent, self.attraction_agent)
+            future_transport = executor.submit(run_agent, self.transport_agent)
 
             results = {
                 "weather_result": future_weather.result(),
@@ -552,7 +609,8 @@ class PlannerAgent:
 
     def _save_itinerary(self, context: dict, itinerary: dict, results: dict,
                         planning_trace: list[dict] | None = None,
-                        user_id: int | None = None) -> int:
+                        user_id: int | None = None,
+                        trace_id: str | None = None) -> int:
         """保存行程到数据库"""
         try:
             from app.db.database import execute, get_db_connection
@@ -561,8 +619,8 @@ class PlannerAgent:
             # 保存行程
             it_id = execute(conn, """
                 INSERT INTO itineraries (user_id, title, destination, origin, start_date, end_date,
-                    traveler_count, budget, travel_style, status, llm_used, itinerary_json, planning_trace)
-                VALUES (?, ?, ?, ?, date('now'), date('now', ?), ?, ?, ?, 'planned', ?, ?, ?)
+                    traveler_count, budget, travel_style, status, llm_used, itinerary_json, planning_trace, trace_id)
+                VALUES (?, ?, ?, ?, date('now'), date('now', ?), ?, ?, ?, 'planned', ?, ?, ?, ?)
             """, (
                 user_id,
                 itinerary.get("title", f"{context['destination']}之旅"),
@@ -575,6 +633,7 @@ class PlannerAgent:
                 self.use_llm,
                 json.dumps(itinerary, ensure_ascii=False),
                 json.dumps(planning_trace or [], ensure_ascii=False),
+                trace_id,
             ))
 
             # 保存Agent日志
@@ -583,8 +642,8 @@ class PlannerAgent:
                 execute(conn, """
                     INSERT INTO agent_logs (itinerary_id, agent_type, agent_name, status,
                         output_result, duration_ms, prompt_tokens, completion_tokens,
-                        estimated_prompt_tokens, estimated_completion_tokens, error_message)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        estimated_prompt_tokens, estimated_completion_tokens, error_message, trace_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     it_id, result.agent_type, result.agent_name, result.status,
                     json.dumps(result.data, ensure_ascii=False),
@@ -594,6 +653,7 @@ class PlannerAgent:
                     usage.get("estimated_prompt_tokens", 0),
                     usage.get("estimated_completion_tokens", 0),
                     result.error or "",
+                    trace_id,
                 ))
 
             conn.close()

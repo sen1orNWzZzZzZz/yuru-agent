@@ -20,6 +20,16 @@ def _mask_key(key: str | None) -> str:
     return f"{key[:8]}****{key[-4:]}"
 
 
+def _is_valid_key(key: str | None) -> bool:
+    """过滤掉明显无效或占位符的 API Key。"""
+    if not key:
+        return False
+    k = str(key).strip()
+    if len(k) < 10 or "your-" in k.lower() or "placeholder" in k.lower() or "example" in k.lower():
+        return False
+    return True
+
+
 class IntegrationConfig:
     """
     外部服务集成配置管理器
@@ -85,7 +95,7 @@ class IntegrationConfig:
     @staticmethod
     def get_map_config() -> dict[str, Any] | None:
         """
-        获取地图API配置
+        获取地图API配置（WebService API，用于后端 POI 搜索/距离计算）
         Returns: {"provider", "api_key", "base_url", "extra_params"}
         """
         conn = get_db_connection()
@@ -112,6 +122,36 @@ class IntegrationConfig:
             if config:
                 logger.info(f"[Config] 地图API配置: {config['provider']}")
             return config
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_map_js_config() -> dict[str, Any] | None:
+        """
+        获取前端地图 JS API 配置（高德 JS API / 百度 JS API）
+        Returns: {"provider", "api_key"}
+        """
+        conn = get_db_connection()
+        try:
+            config = query_one(
+                conn,
+                """SELECT provider, api_key
+                   FROM api_configs
+                   WHERE config_type = 'map_js' AND provider = 'amap_js' AND is_active = 1
+                   LIMIT 1"""
+            )
+            if not config:
+                config = query_one(
+                    conn,
+                    """SELECT provider, api_key
+                       FROM api_configs
+                       WHERE config_type = 'map_js' AND provider = 'amap_js'
+                       ORDER BY updated_at DESC, id DESC LIMIT 1"""
+                )
+            if config and _is_valid_key(config.get("api_key")):
+                logger.info("[Config] 地图 JS API 配置已加载")
+                return config
+            return None
         finally:
             conn.close()
 

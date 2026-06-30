@@ -12,6 +12,7 @@ import httpx
 
 from app.db.database import execute, get_db_connection, query_one
 from app.integrations.config_manager import IntegrationConfig
+from app.tracing import record_span
 
 logger = logging.getLogger(__name__)
 
@@ -121,41 +122,74 @@ class MapClient:
         Returns:
             [{"name", "address", "location", "type", "tel"}, ...]
         """
-        if not self.is_available():
-            return []
-
-        cached = self._get_cached_poi(city, keywords, poi_type)
-        if cached is not None:
-            logger.info(f"[Map] POI 缓存命中: {city}/{keywords}/{poi_type}")
-            return cached
+        start_dt = datetime.now()
+        status = "ok"
+        error = None
+        cached = False
+        result_count = 0
+        provider = self.provider or "none"
 
         try:
+            if not self.is_available():
+                return []
+
+            cached_result = self._get_cached_poi(city, keywords, poi_type)
+            if cached_result is not None:
+                logger.info(f"[Map] POI 缓存命中: {city}/{keywords}/{poi_type}")
+                cached = True
+                result_count = len(cached_result)
+                return cached_result
+
+            results = []
             if self.provider == "amap":
                 results = self._amap_search(city, keywords, poi_type, page_size)
             elif self.provider == "baidu":
                 results = self._baidu_search(city, keywords, poi_type, page_size)
-            else:
-                return []
             if results:
                 self._set_cached_poi(city, keywords, poi_type, results)
             else:
                 logger.warning(f"[Map] {self.provider} 搜索返回空结果，不写入缓存: {city}/{keywords}/{poi_type}")
+            result_count = len(results)
             return results
         except Exception as e:
             logger.error(f"[Map] POI搜索失败: {e}")
+            status = "error"
+            error = str(e)
             if raise_on_error:
                 raise
             return []
+        finally:
+            record_span(
+                name="map.search_poi",
+                service="map",
+                start_time=start_dt,
+                end_time=datetime.now(),
+                status=status,
+                meta={
+                    "provider": provider,
+                    "city": city,
+                    "keywords": keywords,
+                    "poi_type": poi_type,
+                    "cached": cached,
+                    "result_count": result_count,
+                },
+                error=error,
+            )
 
     def geocode(self, address: str, city: str = "") -> dict | None:
         """
         地理编码：地址转坐标
         Returns: {"lng", "lat", "formatted_address"}
         """
-        if not self.is_available():
-            return None
+        start_dt = datetime.now()
+        status = "ok"
+        error = None
+        provider = self.provider or "none"
 
         try:
+            if not self.is_available():
+                return None
+
             if self.provider == "amap":
                 return self._amap_geocode(address, city)
             elif self.provider == "baidu":
@@ -163,17 +197,34 @@ class MapClient:
             return None
         except Exception as e:
             logger.error(f"[Map] 地理编码失败: {e}")
+            status = "error"
+            error = str(e)
             return None
+        finally:
+            record_span(
+                name="map.geocode",
+                service="map",
+                start_time=start_dt,
+                end_time=datetime.now(),
+                status=status,
+                meta={"provider": provider, "address": address, "city": city},
+                error=error,
+            )
 
     def calculate_distance(self, origin: str, destination: str) -> dict | None:
         """
         计算两点间距离
         Returns: {"distance", "duration"}
         """
-        if not self.is_available():
-            return None
+        start_dt = datetime.now()
+        status = "ok"
+        error = None
+        provider = self.provider or "none"
 
         try:
+            if not self.is_available():
+                return None
+
             if self.provider == "amap":
                 return self._amap_distance(origin, destination)
             elif self.provider == "baidu":
@@ -181,7 +232,19 @@ class MapClient:
             return None
         except Exception as e:
             logger.error(f"[Map] 距离计算失败: {e}")
+            status = "error"
+            error = str(e)
             return None
+        finally:
+            record_span(
+                name="map.calculate_distance",
+                service="map",
+                start_time=start_dt,
+                end_time=datetime.now(),
+                status=status,
+                meta={"provider": provider, "origin": origin, "destination": destination},
+                error=error,
+            )
 
     def test_connection(self) -> dict[str, Any]:
         """测试地图API连接"""

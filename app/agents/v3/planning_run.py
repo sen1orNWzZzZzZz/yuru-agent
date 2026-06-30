@@ -23,6 +23,7 @@ class PlanningRunService:
         user_id: int | None,
         input_params: dict[str, Any],
         idempotency_key: str | None = None,
+        trace_id: str | None = None,
     ) -> int:
         """创建一个新的规划 Run（非幂等，内部使用）"""
         conn = get_db_connection()
@@ -31,12 +32,12 @@ class PlanningRunService:
                 conn,
                 """
                 INSERT INTO planning_runs
-                (user_id, input_params, status, current_step, total_steps, idempotency_key)
-                VALUES (?, ?, 'pending', 0, 0, ?)
+                (user_id, input_params, status, current_step, total_steps, idempotency_key, trace_id)
+                VALUES (?, ?, 'pending', 0, 0, ?, ?)
                 """,
-                (user_id, json.dumps(input_params, ensure_ascii=False), idempotency_key),
+                (user_id, json.dumps(input_params, ensure_ascii=False), idempotency_key, trace_id),
             )
-            logger.info(f"[PlanningRun] 创建 run_id={run_id}")
+            logger.info(f"[PlanningRun] 创建 run_id={run_id} trace_id={trace_id}")
             return run_id
         finally:
             conn.close()
@@ -46,6 +47,7 @@ class PlanningRunService:
         user_id: int | None,
         input_params: dict[str, Any],
         idempotency_key: str | None = None,
+        trace_id: str | None = None,
     ) -> tuple[int, bool]:
         """
         幂等创建 Run。
@@ -53,7 +55,7 @@ class PlanningRunService:
         返回: (run_id, is_new)
         """
         if not idempotency_key:
-            return PlanningRunService.create_run(user_id, input_params, None), True
+            return PlanningRunService.create_run(user_id, input_params, None, trace_id), True
 
         conn = get_db_connection()
         try:
@@ -74,12 +76,12 @@ class PlanningRunService:
                 conn,
                 """
                 INSERT INTO planning_runs
-                (user_id, input_params, status, current_step, total_steps, idempotency_key)
-                VALUES (?, ?, 'pending', 0, 0, ?)
+                (user_id, input_params, status, current_step, total_steps, idempotency_key, trace_id)
+                VALUES (?, ?, 'pending', 0, 0, ?, ?)
                 """,
-                (user_id, json.dumps(input_params, ensure_ascii=False), idempotency_key),
+                (user_id, json.dumps(input_params, ensure_ascii=False), idempotency_key, trace_id),
             )
-            logger.info(f"[PlanningRun] 幂等创建新 run_id={run_id}")
+            logger.info(f"[PlanningRun] 幂等创建新 run_id={run_id} trace_id={trace_id}")
             return run_id, True
         finally:
             conn.close()
@@ -118,6 +120,7 @@ class PlanningRunService:
         cached_result: AgentResult | None = None,
         status: str = "completed",
         duration_ms: int = 0,
+        trace_id: str | None = None,
     ) -> int:
         """向 Run 追加一个步骤"""
         conn = get_db_connection()
@@ -130,8 +133,8 @@ class PlanningRunService:
                 """
                 INSERT INTO planning_steps
                 (run_id, step_number, step_type, tool_name, tool_input, content,
-                 observation_json, cached_result_json, status, duration_ms)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 observation_json, cached_result_json, status, duration_ms, trace_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -144,6 +147,7 @@ class PlanningRunService:
                     cached_json,
                     status,
                     duration_ms,
+                    trace_id,
                 ),
             )
             execute(

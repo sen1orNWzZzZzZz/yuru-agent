@@ -11,6 +11,7 @@ from app.agents.v3.planning_run import PlanningRunService
 from app.agents.v3.tool import ToolRegistry
 from app.agents.v3.tools import agent_result_to_observation
 from app.integrations.llm_client import LLMClient
+from app.tracing import get_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,7 @@ class PlannerRuntime:
                     cached_result=cached_result if step["type"] == "observation" else None,
                     status=status,
                     duration_ms=duration_ms,
+                    trace_id=get_trace_id(),
                 )
             except Exception as e:
                 logger.warning(f"[PlannerRuntime] 持久化 step 失败: {e}")

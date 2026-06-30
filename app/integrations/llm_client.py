@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from app.integrations.config_manager import IntegrationConfig
+from app.tracing import record_span
 
 logger = logging.getLogger(__name__)
 
@@ -337,8 +338,15 @@ class LLMClient:
             cache_ttl: 缓存过期时间（秒）
             extra_payload: 额外请求参数（如 response_format）
         """
+        from app.tracing import get_trace_id
+
+        start_dt = datetime.now()
+        model_name = self.config.get("model_name") if self.config else None
+
         if not self.is_available():
-            return {"success": False, "content": "", "error": "LLM未配置或未启用"}
+            return self._record_llm_span(
+                start_dt, {"success": False, "content": "", "error": "LLM未配置或未启用", "model": model_name}
+            )
 
         base_url = self.config["base_url"].rstrip("/")
         url = f"{base_url}/chat/completions"
@@ -372,14 +380,17 @@ class LLMClient:
             cached = self.cache.get(cache_key)
             if cached is not None:
                 logger.info(f"[LLM] 缓存命中: key={cache_key[:12]}...")
-                return {
-                    "success": True,
-                    "content": cached["content"],
-                    "usage": _inject_estimate(cached["usage"].copy()),
-                    "latency_ms": 0,
-                    "model": payload["model"],
-                    "cached": True,
-                }
+                return self._record_llm_span(
+                    start_dt,
+                    {
+                        "success": True,
+                        "content": cached["content"],
+                        "usage": _inject_estimate(cached["usage"].copy()),
+                        "latency_ms": 0,
+                        "model": payload["model"],
+                        "cached": True,
+                    },
+                )
 
         # 2. 调用 LLM API
         start_time = time.time()
@@ -412,28 +423,62 @@ class LLMClient:
                     latency_ms=latency_ms,
                 )
 
-            return {
-                "success": True,
-                "content": content,
-                "usage": usage,
-                "latency_ms": latency_ms,
-                "model": data.get("model", payload["model"]),
-                "cached": False,
-            }
+            return self._record_llm_span(
+                start_dt,
+                {
+                    "success": True,
+                    "content": content,
+                    "usage": usage,
+                    "latency_ms": latency_ms,
+                    "model": data.get("model", payload["model"]),
+                    "cached": False,
+                },
+            )
 
         except httpx.TimeoutException:
             logger.error("[LLM] 请求超时")
-            return {"success": False, "content": "", "error": "请求超时",
-                    "usage": _inject_estimate({})}
+            return self._record_llm_span(
+                start_dt,
+                {"success": False, "content": "", "error": "请求超时",
+                 "usage": _inject_estimate({}), "model": payload["model"]},
+            )
         except httpx.HTTPStatusError as e:
             err_text = e.response.text[:200]
             logger.error(f"[LLM] HTTP错误 {e.response.status_code}: {err_text}")
-            return {"success": False, "content": "", "error": f"API错误({e.response.status_code}): {err_text}",
-                    "usage": _inject_estimate({})}
+            return self._record_llm_span(
+                start_dt,
+                {"success": False, "content": "", "error": f"API错误({e.response.status_code}): {err_text}",
+                 "usage": _inject_estimate({}), "model": payload["model"]},
+            )
         except Exception as e:
             logger.error(f"[LLM] 异常: {e}")
-            return {"success": False, "content": "", "error": str(e),
-                    "usage": _inject_estimate({})}
+            return self._record_llm_span(
+                start_dt,
+                {"success": False, "content": "", "error": str(e),
+                 "usage": _inject_estimate({}), "model": payload["model"]},
+            )
+
+    def _record_llm_span(self, start_dt: datetime, result: dict[str, Any]) -> dict[str, Any]:
+        """记录 LLM 调用 Span 并返回结果"""
+        usage = result.get("usage", {})
+        record_span(
+            name="llm.chat_messages",
+            service="llm",
+            start_time=start_dt,
+            end_time=datetime.now(),
+            status="ok" if result.get("success") else "error",
+            meta={
+                "model": result.get("model") or (self.config.get("model_name") if self.config else None),
+                "cached": bool(result.get("cached")),
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "estimated_prompt_tokens": usage.get("estimated_prompt_tokens", 0),
+                "estimated_completion_tokens": usage.get("estimated_completion_tokens", 0),
+                "latency_ms": result.get("latency_ms", 0),
+            },
+            error=result.get("error") or None,
+        )
+        return result
 
     def chat_with_retry(self, messages: list[dict[str, str]],
                         max_retries: int = 2,

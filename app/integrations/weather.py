@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from app.integrations.config_manager import IntegrationConfig
+from app.tracing import record_span
 
 logger = logging.getLogger(__name__)
 
@@ -69,19 +70,43 @@ class WeatherClient:
         Returns:
             {"temp", "feels_like", "humidity", "description", "icon", "wind_speed", "success"}
         """
-        if not self.is_available():
-            return self._mock_weather(city)
-
+        start_dt = datetime.now()
+        status = "ok"
+        error = None
+        provider = self.provider or "mock"
         try:
+            if not self.is_available():
+                result = self._mock_weather(city)
+                provider = result.get("provider", "mock")
+                return result
+
             if self.provider == "openweathermap":
-                return self._owm_current(city)
+                result = self._owm_current(city)
+                provider = result.get("provider", "openweathermap")
+                return result
             elif self.provider == "qweather":
-                return self._qweather_current(city)
+                result = self._qweather_current(city)
+                provider = result.get("provider", "qweather")
+                return result
             else:
-                return self._mock_weather(city)
+                result = self._mock_weather(city)
+                provider = result.get("provider", "mock")
+                return result
         except Exception as e:
             logger.error(f"[Weather] 获取天气失败: {e}")
+            status = "error"
+            error = str(e)
             return self._mock_weather(city)
+        finally:
+            record_span(
+                name="weather.get_current_weather",
+                service="weather",
+                start_time=start_dt,
+                end_time=datetime.now(),
+                status=status,
+                meta={"provider": provider, "city": city, "mock": provider == "mock"},
+                error=error,
+            )
 
     def get_forecast(self, city: str, days: int = 3) -> list:
         """
@@ -92,19 +117,43 @@ class WeatherClient:
         Returns:
             [{"date", "temp_max", "temp_min", "description", "icon"}, ...]
         """
-        if not self.is_available():
-            return self._mock_forecast(city, days)
-
+        start_dt = datetime.now()
+        status = "ok"
+        error = None
+        provider = self.provider or "mock"
         try:
+            if not self.is_available():
+                result = self._mock_forecast(city, days)
+                provider = result[0].get("provider", "mock") if result else "mock"
+                return result
+
             if self.provider == "openweathermap":
-                return self._owm_forecast(city, days)
+                result = self._owm_forecast(city, days)
+                provider = "openweathermap"
+                return result
             elif self.provider == "qweather":
-                return self._qweather_forecast(city, days)
+                result = self._qweather_forecast(city, days)
+                provider = "qweather"
+                return result
             else:
-                return self._mock_forecast(city, days)
+                result = self._mock_forecast(city, days)
+                provider = "mock"
+                return result
         except Exception as e:
             logger.error(f"[Weather] 获取预报失败: {e}")
+            status = "error"
+            error = str(e)
             return self._mock_forecast(city, days)
+        finally:
+            record_span(
+                name="weather.get_forecast",
+                service="weather",
+                start_time=start_dt,
+                end_time=datetime.now(),
+                status=status,
+                meta={"provider": provider, "city": city, "days": days, "mock": provider == "mock"},
+                error=error,
+            )
 
     def get_clothing_advice(self, temp: float, weather_desc: str) -> str:
         """
