@@ -12,16 +12,12 @@
 用户请求
   │
   ▼
-PlannerAgent.plan() ── 解析需求，协调执行
+PlannerAgent.plan() ── 解析需求，LLM 单次规划
   │
-  ├── WeatherAgent ─────── 查询目的地天气 + 穿着建议
-  ├── HotelAgent ───────── 数据库查询酒店 + 小红书口碑 + 高德POI fallback
-  ├── RestaurantAgent ──── 数据库查询餐厅 + 特色菜品 + 高德POI fallback
-  ├── AttractionAgent ──── 数据库查询景点 + 高反风险评估 + 高德POI fallback
-  ├── TransportAgent ───── 飞机/高铁/自驾方案对比
-  │         (以上5个Agent并行执行 ThreadPool)
-  │
-  └── RiskAgent ────────── 综合风控检查（预算/安全/时间）
+  ├── WeatherAgent/HotelAgent/TransportAgent (Layer 0, 并行)
+  ├── RestaurantAgent/AttractionAgent       (Layer 1, 依赖 Hotel/Weather)
+  └── RiskAgent                             (Layer 2, 依赖全部)
+  │         (AgentScheduler 依赖驱动线程池并行；下游通过 PlanningState 读上游数据)
   │
   ▼
 LLM整合生成行程 / 模板生成（降级）
@@ -287,7 +283,7 @@ sqlite3 app/db/travel_v3.db < app/db/seed.sql
 | 天气 | OpenWeatherMap / QWeather API |
 | 地图 | 高德地图 / 百度地图 API |
 | 前端 | Jinja2模板 + 原生JS + Chart.js |
-| 并发 | ThreadPoolExecutor |
+| 并发 | AgentScheduler (依赖驱动 + ThreadPoolExecutor) |
 
 ---
 
@@ -295,14 +291,15 @@ sqlite3 app/db/travel_v3.db < app/db/seed.sql
 
 ### 8.1 新增子Agent
 
-1. 在 `app/agents/v3/` 下创建新Agent文件
+1. 在 `app/agents/v3/` 下创建新 Agent 文件
 2. 继承 `BaseAgentV3`，实现 `_execute_with_db()` 和 `_build_prompt()`
-3. 在 `PlannerAgent.__init__()` 中注册
-4. 在 `PlannerAgent._execute_sub_agents()` 中添加并行调用
+3. 声明 `depends_on = [...]` 表达本 Agent 需要读取哪些上游 Agent 的数据
+4. 在 `PlannerAgent._agents_by_type()` 中注册
+5. 如需 LLM 动态传参，在 `tools.py` 的 `build_tool_registry()` 中补一个 Tool schema
 
-### 8.2 新增API Provider
+### 8.2 新增 API Provider
 
-在 `weather.py` 或 `map.py` 中添加新的provider实现方法即可。
+在 `weather.py` 或 `map.py` 中添加新的 provider 实现方法即可。
 
 ---
 

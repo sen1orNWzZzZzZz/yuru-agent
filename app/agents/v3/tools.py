@@ -1,6 +1,6 @@
 """
-把现有子 Agent 注册为 Tool，供 PlannerRuntime 动态调用。
-支持 LLM 为每个 Tool 传入动态参数。
+把现有子 Agent 注册为 Tool，供形态 B 的 LLM 一次性规划使用。
+每个 Tool 包含：名称、描述、输入 Schema、执行函数。
 """
 from app.agents.v3.base import AgentResult
 from app.agents.v3.poi_agent import AttractionAgent, HotelAgent, RestaurantAgent, TransportAgent
@@ -125,12 +125,11 @@ def build_tool_registry(llm_client) -> ToolRegistry:
 
     registry.register(Tool(
         name="risk_check",
-        description="综合评估预算、高反、天气、团队规模等风险，必须在收集完其他信息后调用。",
+        description="综合评估预算、高反、天气、团队规模等风险，依赖酒店/景点/天气/交通结果。",
         input_schema={"type": "object", "properties": {}, "required": []},
-        execute_fn=lambda inputs: risk_agent.execute({
-            **_merge_tool_input(inputs),
-            **inputs.get("results", {}),
-        }),
+        # 形态 B 中风险所需的上游结果由 PlanningState 统一供给（RiskAgent 通过 depends_on 声明），
+        # 不再手动拼接 results。
+        execute_fn=lambda inputs: risk_agent.execute(_merge_tool_input(inputs)),
     ))
 
     return registry
@@ -145,12 +144,19 @@ def agent_result_to_observation(result: AgentResult) -> dict[str, Any]:
     elif result.agent_type == "hotel":
         summary = {"hotel_count": len(data.get("hotels", [])), "total": data.get("total", 0)}
     elif result.agent_type == "restaurant":
-        summary = {"restaurant_count": len(data.get("restaurants", [])), "total": data.get("total", 0)}
+        summary = {
+            "restaurant_count": len(data.get("restaurants", [])),
+            "total": data.get("total", 0),
+            # consumed_from 由 RestaurantAgent 记录到 data 中（如果有）
+            "consumed_from": data.get("consumed_from", {}),
+        }
     elif result.agent_type == "attraction":
+        trace = data.get("_trace", {})
         summary = {
             "attraction_count": len(data.get("attractions", [])),
             "total": data.get("total", 0),
-            "trace": data.get("_trace", {}),
+            # 上游数据依赖通信：这个 agent 用了谁的数据
+            "consumed_from": trace.get("consumed_from", {}),
         }
     elif result.agent_type == "transport":
         summary = {"distance_km": data.get("distance_km"), "options": len(data.get("options", []))}

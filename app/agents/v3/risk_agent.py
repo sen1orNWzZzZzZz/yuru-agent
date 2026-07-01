@@ -12,6 +12,7 @@ class RiskAgent(BaseAgentV3):
 
     agent_type = "risk"
     agent_name = "风控Agent"
+    depends_on = ["hotel", "attraction", "weather", "transport"]  # 综合上游结果评估风险
 
     @staticmethod
     def _unwrap(value: Any) -> Any:
@@ -36,7 +37,9 @@ class RiskAgent(BaseAgentV3):
         if budget:
             hotels = hotel_data.get("hotels", [])
             if hotels:
-                avg_hotel = sum(h.get("price_value", 0) for h in hotels[:3]) / min(len(hotels), 3)
+                # price_value 可能为 None（地图 API POI 常无价格），用 0 兜底避免求和崩溃
+                priced = [(h.get("price_value") or 0) for h in hotels[:3]]
+                avg_hotel = sum(priced) / min(len(hotels), 3)
                 est_hotel = avg_hotel * days
                 if est_hotel > budget * 0.5:
                     warnings.append({

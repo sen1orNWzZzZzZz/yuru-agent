@@ -59,6 +59,9 @@ class BaseAgentV3(ABC):
 
     agent_type: str = ""
     agent_name: str = ""
+    # 声明式依赖：本 Agent 执行时，这些上游 agent_type 的结果必已在 PlanningState 中。
+    # 由 AgentScheduler 强制保证（依赖就绪才提交），下游据此通过 state 读上游数据。
+    depends_on: list[str] = []
     # 子类可覆盖，要求 LLM 按 JSON Schema 输出
     response_schema: dict | None = None
 

@@ -3,12 +3,40 @@ POI数据Agent - 从数据库查询酒店/餐厅/景点
 集成反水军评分，支持高德/百度 POI 搜索 fallback
 """
 import json
+import logging
+import math
 from datetime import datetime, timedelta
 from typing import Any
 
 from app.agents.v3.base import BaseAgentV3
 from app.db.database import execute, get_db_connection, query_all, query_one
 from app.integrations.map import MapClient
+
+logger = logging.getLogger(__name__)
+
+# 户外类景点关键词：雨天时下沉排序，优先室内
+_OUTDOOR_KEYWORDS = ("公园", "山", "湖", "海", "徒步", "露营", "古镇", "峡谷", "瀑布", "沙滩", "花海", "草原", "湿地")
+
+
+def _haversine_km(lat1, lon1, lat2, lon2) -> float:
+    """两点间直线距离（公里）；坐标缺失时返回 inf。"""
+    if lat1 is None or lon1 is None or lat2 is None or lon2 is None:
+        return float("inf")
+    R = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _distance_to(loc: tuple[float, float], poi: dict) -> float:
+    return _haversine_km(loc[0], loc[1], poi.get("latitude"), poi.get("longitude"))
+
+
+def _is_outdoor(poi: dict) -> bool:
+    text = f"{poi.get('name', '')} {poi.get('tags', '')} {poi.get('description', '')}"
+    return any(k in text for k in _OUTDOOR_KEYWORDS)
 
 
 def _external_to_poi_dict(external: dict, poi_type: str, city: str) -> dict:
@@ -185,6 +213,7 @@ class RestaurantAgent(BaseAgentV3):
 
     agent_type = "restaurant"
     agent_name = "餐饮推荐Agent"
+    depends_on = ["hotel"]  # 读酒店位置做就近推荐
 
     def _execute_with_db(self, context: dict[str, Any]) -> dict[str, Any]:
         city = context.get("destination", "")
@@ -219,6 +248,15 @@ class RestaurantAgent(BaseAgentV3):
                 for r in local_restaurants:
                     r.setdefault("source", "local_db")
                 restaurants = _merge_pois(restaurants, local_restaurants)
+
+            # 读上游酒店位置做就近排序（依赖 hotel）
+            state = context.get("_state")
+            hotel_loc = state.hotel_location if state and state.status("hotel") == "completed" else None
+            consumed_from = {"hotel_location": hotel_loc} if hotel_loc else {}
+            if state and state.status("hotel") != "completed":
+                consumed_from["hotel_failed"] = True
+            if hotel_loc:
+                restaurants.sort(key=lambda r: _distance_to(hotel_loc, r))
 
             # 按价位分类（外部数据通常没有 price_level，优先按本地字段分类）
             categories = {"luxury": [], "high": [], "medium": [], "low": []}
@@ -284,6 +322,7 @@ class AttractionAgent(BaseAgentV3):
 
     agent_type = "attraction"
     agent_name = "景点推荐Agent"
+    depends_on = ["hotel", "weather"]  # 读酒店位置做就近排序、读天气偏好室内/室外
 
     # 景点池在 external_poi_cache 中的标记
     _CACHE_PROVIDER = "attraction_pool"
@@ -413,6 +452,27 @@ class AttractionAgent(BaseAgentV3):
             # 5. 最终排序：评分优先，再按评论数
             pool.sort(key=lambda a: (a.get("rating") or 0, a.get("review_count") or 0), reverse=True)
 
+            # 5b. 读上游数据做通信驱动的重排（依赖 hotel / weather）
+            state = context.get("_state")
+            consumed_from: dict[str, Any] = {}
+            hotel_loc = state.hotel_location if state and state.status("hotel") == "completed" else None
+            is_rainy = state.is_rainy if state and state.status("weather") == "completed" else False
+            if hotel_loc:
+                # 就近排序：优先安排酒店附近的景点（Python stable sort）
+                pool.sort(key=lambda a: _distance_to(hotel_loc, a))
+                consumed_from["hotel_location"] = hotel_loc
+            if is_rainy:
+                # 雨天把户外景点稳定下沉到末尾，室内优先
+                pool.sort(key=lambda a: _is_outdoor(a))
+                consumed_from["is_rainy"] = True
+
+            # 降级标记：如果依赖的上游失败了，trace 里也能看出来
+            if state:
+                if state.status("hotel") != "completed":
+                    consumed_from["hotel_failed"] = True
+                if state.status("weather") != "completed":
+                    consumed_from["weather_failed"] = True
+
             # 6. 高反风险评估
             altitude_risks = []
             for a in pool:
@@ -439,6 +499,7 @@ class AttractionAgent(BaseAgentV3):
                 "days": days,
                 "shortage_warning": final_count < days,
                 "warning": "景点数量不足以支撑每天 1 个" if final_count < days else None,
+                "consumed_from": consumed_from,
             }
 
             return {
